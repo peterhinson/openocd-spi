@@ -139,7 +139,7 @@ struct armv8_l2x_cache {
 
 struct armv8_cachesize {
 	uint32_t level_num;
-	/*  cache dimensionning */
+	/*  cache dimensioning */
 	uint32_t linelen;
 	uint32_t associativity;
 	uint32_t nsets;
@@ -196,7 +196,7 @@ struct armv8_common {
 
 	/* Core Debug Unit */
 	struct arm_dpm dpm;
-	uint32_t debug_base;
+	target_addr_t debug_base;
 	struct adiv5_ap *debug_ap;
 
 	const uint32_t *opcodes;
@@ -257,8 +257,8 @@ static inline bool is_armv8(struct armv8_common *armv8)
 
 #define CPUV8_DBG_EDESR		0x20
 #define CPUV8_DBG_EDECR		0x24
-#define CPUV8_DBG_WFAR0		0x30
-#define CPUV8_DBG_WFAR1		0x34
+#define CPUV8_DBG_EDWAR0	0x30
+#define CPUV8_DBG_EDWAR1	0x34
 #define CPUV8_DBG_DSCR		0x088
 #define CPUV8_DBG_DRCR		0x090
 #define CPUV8_DBG_ECCR		0x098
@@ -330,6 +330,7 @@ static inline unsigned int armv8_curel_from_core_mode(enum arm_mode core_mode)
 	}
 }
 
+const char *armv8_mode_name(unsigned psr_mode);
 void armv8_select_reg_access(struct armv8_common *armv8, bool is_aarch64);
 int armv8_set_dbgreg_bits(struct armv8_common *armv8, unsigned int reg, unsigned long mask, unsigned long value);
 

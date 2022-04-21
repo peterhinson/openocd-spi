@@ -32,6 +32,9 @@
 #define OPENOCD_TARGET_TARGET_H
 
 #include <helper/list.h>
+#include "helper/replacements.h"
+#include "helper/system.h"
+#include <jim.h>
 
 struct reg;
 struct trace;
@@ -46,7 +49,7 @@ struct gdb_fileio_info;
 
 /*
  * TARGET_UNKNOWN = 0: we don't know anything about the target yet
- * TARGET_RUNNING = 1: the target is executing user code
+ * TARGET_RUNNING = 1: the target is executing or ready to execute user code
  * TARGET_HALTED  = 2: the target is not executing code, and ready to talk to the
  * debugger. on an xscale it means that the debug handler is executing
  * TARGET_RESET   = 3: the target is being held in reset (only a temporary state,
@@ -154,7 +157,7 @@ struct target {
 
 	struct target_event_action *event_action;
 
-	int reset_halt;						/* attempt resetting the CPU into the halted mode? */
+	bool reset_halt;						/* attempt resetting the CPU into the halted mode? */
 	target_addr_t working_area;				/* working area (initialised RAM). Evaluated
 										 * upon first allocation from virtual/physical address. */
 	bool working_area_virt_spec;		/* virtual address specified? */
@@ -198,7 +201,9 @@ struct target {
 										 * and must be detected when symbols are offered */
 	struct backoff_timer backoff;
 	int smp;							/* add some target attributes for smp support */
-	struct target_list *head;
+	struct list_head *smp_targets;		/* list all targets in this smp group/cluster
+										 * The head of the list is shared between the
+										 * cluster, thus here there is a pointer */
 	/* the gdb service is there in case of smp, we have only one gdb server
 	 * for all smp target
 	 * the target attached to the gdb is changing dynamically by changing
@@ -210,13 +215,15 @@ struct target {
 
 	char *gdb_port_override;			/* target-specific override for gdb_port */
 
+	int gdb_max_connections;			/* max number of simultaneous gdb connections */
+
 	/* The semihosting information, extracted from the target. */
 	struct semihosting *semihosting;
 };
 
 struct target_list {
+	struct list_head lh;
 	struct target *target;
-	struct target_list *next;
 };
 
 struct gdb_fileio_info {
@@ -258,6 +265,8 @@ enum target_event {
 	TARGET_EVENT_RESUMED,		/* target resumed to normal execution */
 	TARGET_EVENT_RESUME_START,
 	TARGET_EVENT_RESUME_END,
+	TARGET_EVENT_STEP_START,
+	TARGET_EVENT_STEP_END,
 
 	TARGET_EVENT_GDB_START, /* debugger started execution (step/run) */
 	TARGET_EVENT_GDB_END, /* debugger stopped execution (step/run) */
@@ -275,6 +284,7 @@ enum target_event {
 	TARGET_EVENT_DEBUG_RESUMED, /* target resumed to execute on behalf of the debugger */
 
 	TARGET_EVENT_EXAMINE_START,
+	TARGET_EVENT_EXAMINE_FAIL,
 	TARGET_EVENT_EXAMINE_END,
 
 	TARGET_EVENT_GDB_ATTACH,
@@ -286,12 +296,21 @@ enum target_event {
 	TARGET_EVENT_GDB_FLASH_WRITE_END,
 
 	TARGET_EVENT_TRACE_CONFIG,
+
+	TARGET_EVENT_SEMIHOSTING_USER_CMD_0x100 = 0x100, /* semihosting allows user cmds from 0x100 to 0x1ff */
+	TARGET_EVENT_SEMIHOSTING_USER_CMD_0x101 = 0x101,
+	TARGET_EVENT_SEMIHOSTING_USER_CMD_0x102 = 0x102,
+	TARGET_EVENT_SEMIHOSTING_USER_CMD_0x103 = 0x103,
+	TARGET_EVENT_SEMIHOSTING_USER_CMD_0x104 = 0x104,
+	TARGET_EVENT_SEMIHOSTING_USER_CMD_0x105 = 0x105,
+	TARGET_EVENT_SEMIHOSTING_USER_CMD_0x106 = 0x106,
+	TARGET_EVENT_SEMIHOSTING_USER_CMD_0x107 = 0x107,
 };
 
 struct target_event_action {
 	enum target_event event;
-	struct Jim_Interp *interp;
-	struct Jim_Obj *body;
+	Jim_Interp *interp;
+	Jim_Obj *body;
 	struct target_event_action *next;
 };
 
@@ -325,7 +344,7 @@ struct target_timer_callback {
 	unsigned int time_ms;
 	enum target_timer_type type;
 	bool removed;
-	struct timeval when;
+	int64_t when;	/* output of timeval_ms() */
 	void *priv;
 	struct target_timer_callback *next;
 };
@@ -399,6 +418,11 @@ int target_call_timer_callbacks(void);
  * a synchronous command completes.
  */
 int target_call_timer_callbacks_now(void);
+/**
+ * Returns when the next registered event will take place. Callers can use this
+ * to go to sleep until that time occurs.
+ */
+int64_t target_timer_next_event(void);
 
 struct target *get_target_by_num(int num);
 struct target *get_current_target(struct command_context *cmd_ctx);
@@ -534,7 +558,7 @@ int target_step(struct target *target,
 int target_run_algorithm(struct target *target,
 		int num_mem_params, struct mem_param *mem_params,
 		int num_reg_params, struct reg_param *reg_param,
-		uint32_t entry_point, uint32_t exit_point,
+		target_addr_t entry_point, target_addr_t exit_point,
 		int timeout_ms, void *arch_info);
 
 /**
@@ -545,7 +569,7 @@ int target_run_algorithm(struct target *target,
 int target_start_algorithm(struct target *target,
 		int num_mem_params, struct mem_param *mem_params,
 		int num_reg_params, struct reg_param *reg_params,
-		uint32_t entry_point, uint32_t exit_point,
+		target_addr_t entry_point, target_addr_t exit_point,
 		void *arch_info);
 
 /**
@@ -556,7 +580,7 @@ int target_start_algorithm(struct target *target,
 int target_wait_algorithm(struct target *target,
 		int num_mem_params, struct mem_param *mem_params,
 		int num_reg_params, struct reg_param *reg_params,
-		uint32_t exit_point, int timeout_ms,
+		target_addr_t exit_point, int timeout_ms,
 		void *arch_info);
 
 /**
@@ -565,6 +589,18 @@ int target_wait_algorithm(struct target *target,
  */
 int target_run_flash_async_algorithm(struct target *target,
 		const uint8_t *buffer, uint32_t count, int block_size,
+		int num_mem_params, struct mem_param *mem_params,
+		int num_reg_params, struct reg_param *reg_params,
+		uint32_t buffer_start, uint32_t buffer_size,
+		uint32_t entry_point, uint32_t exit_point,
+		void *arch_info);
+
+/**
+ * This routine is a wrapper for asynchronous algorithms.
+ *
+ */
+int target_run_read_async_algorithm(struct target *target,
+		uint8_t *buffer, uint32_t count, int block_size,
 		int num_mem_params, struct mem_param *mem_params,
 		int num_reg_params, struct reg_param *reg_params,
 		uint32_t buffer_start, uint32_t buffer_size,
@@ -664,6 +700,13 @@ target_addr_t target_address_max(struct target *target);
  */
 unsigned target_address_bits(struct target *target);
 
+/**
+ * Return the number of data bits this target supports.
+ *
+ * This routine is a wrapper for target->type->data_bits.
+ */
+unsigned int target_data_bits(struct target *target);
+
 /** Return the *name* of this targets current state */
 const char *target_state_name(struct target *target);
 
@@ -694,6 +737,13 @@ int target_alloc_working_area(struct target *target,
  */
 int target_alloc_working_area_try(struct target *target,
 		uint32_t size, struct working_area **area);
+/**
+ * Free a working area.
+ * Restore target data if area backup is configured.
+ * @param target
+ * @param area Pointer to the area to be freed or NULL
+ * @returns ERROR_OK if successful; error code if restore failed
+ */
 int target_free_working_area(struct target *target, struct working_area *area);
 void target_free_all_working_areas(struct target *target);
 uint32_t target_get_working_area_avail(struct target *target);
@@ -744,6 +794,9 @@ void target_handle_md_output(struct command_invocation *cmd,
 	struct target *target, target_addr_t address, unsigned size,
 	unsigned count, const uint8_t *buffer);
 
+int target_profiling_default(struct target *target, uint32_t *samples, uint32_t
+		max_num_samples, uint32_t *num_samples, uint32_t seconds);
+
 #define ERROR_TARGET_INVALID	(-300)
 #define ERROR_TARGET_INIT_FAILED (-301)
 #define ERROR_TARGET_TIMEOUT	(-302)
@@ -756,7 +809,10 @@ void target_handle_md_output(struct command_invocation *cmd,
 #define ERROR_TARGET_NOT_RUNNING (-310)
 #define ERROR_TARGET_NOT_EXAMINED (-311)
 #define ERROR_TARGET_DUPLICATE_BREAKPOINT (-312)
+#define ERROR_TARGET_ALGO_EXIT  (-313)
 
 extern bool get_target_reset_nag(void);
+
+#define TARGET_DEFAULT_POLLING_INTERVAL		100
 
 #endif /* OPENOCD_TARGET_TARGET_H */

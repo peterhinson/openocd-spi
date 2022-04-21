@@ -113,7 +113,7 @@ static void ls1_sap_set_instr(struct jtag_tap *tap, uint32_t new_instr)
 static void ls1_sap_set_addr_high(struct jtag_tap *tap, uint16_t addr_high)
 {
 	struct scan_field field;
-	uint8_t buf[2];
+	uint8_t buf[2] = { 0 };
 
 	ls1_sap_set_instr(tap, 0x21);
 
@@ -130,7 +130,7 @@ static void ls1_sap_memory_cmd(struct jtag_tap *tap, uint32_t address,
 			       int32_t size, bool rnw)
 {
 	struct scan_field field;
-	uint8_t cmd[8];
+	uint8_t cmd[8] = { 0 };
 
 	ls1_sap_set_instr(tap, 0x24);
 
@@ -182,9 +182,9 @@ static int ls1_sap_read_memory(struct target *target, target_addr_t address,
 			       uint32_t size, uint32_t count, uint8_t *buffer)
 {
 	LOG_DEBUG("Reading memory at physical address 0x%" TARGET_PRIxADDR
-		  "; size %" PRId32 "; count %" PRId32, address, size, count);
+		  "; size %" PRIu32 "; count %" PRIu32, address, size, count);
 
-	if (count == 0 || buffer == NULL)
+	if (count == 0 || !buffer)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
 	ls1_sap_set_addr_high(target->tap, 0);
@@ -204,10 +204,10 @@ static int ls1_sap_write_memory(struct target *target, target_addr_t address,
 				const uint8_t *buffer)
 {
 	LOG_DEBUG("Writing memory at physical address 0x%" TARGET_PRIxADDR
-		  "; size %" PRId32 "; count %" PRId32, address, size, count);
+		  "; size %" PRIu32 "; count %" PRIu32, address, size, count);
 
 
-	if (count == 0 || buffer == NULL)
+	if (count == 0 || !buffer)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
 	ls1_sap_set_addr_high(target->tap, 0);

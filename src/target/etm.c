@@ -27,11 +27,6 @@
 #include "register.h"
 #include "etm_dummy.h"
 
-#if BUILD_OOCD_TRACE == 1
-#include "oocd_trace.h"
-#endif
-
-
 /*
  * ARM "Embedded Trace Macrocell" (ETM) support -- direct JTAG access.
  *
@@ -279,7 +274,7 @@ static void etm_reg_add(unsigned bcd_vers, struct arm_jtag *jtag_info,
 
 		reg->name = r->name;
 		reg->size = r->size;
-		reg->value = &ereg->value;
+		reg->value = ereg->value;
 		reg->arch_info = ereg;
 		reg->type = &etm_scan6_type;
 		reg++;
@@ -302,6 +297,11 @@ struct reg_cache *etm_build_reg_cache(struct target *target,
 	/* the actual registers are kept in two arrays */
 	reg_list = calloc(128, sizeof(struct reg));
 	arch_info = calloc(128, sizeof(struct etm_reg));
+
+	if (!reg_cache || !reg_list || !arch_info) {
+		LOG_ERROR("No memory");
+		goto fail;
+	}
 
 	/* fill in values for the reg cache */
 	reg_cache->name = "etm registers";
@@ -498,6 +498,7 @@ static int etm_read_reg_w_check(struct reg *reg,
 	uint8_t *check_value, uint8_t *check_mask)
 {
 	struct etm_reg *etm_reg = reg->arch_info;
+	assert(etm_reg);
 	const struct etm_reg_info *r = etm_reg->reg_info;
 	uint8_t reg_addr = r->addr & 0x7f;
 	struct scan_field fields[3];
@@ -527,7 +528,7 @@ static int etm_read_reg_w_check(struct reg *reg,
 	fields[0].check_mask = NULL;
 
 	fields[1].num_bits = 7;
-	uint8_t temp1;
+	uint8_t temp1 = 0;
 	fields[1].out_value = &temp1;
 	buf_set_u32(&temp1, 0, 7, reg_addr);
 	fields[1].in_value = NULL;
@@ -535,7 +536,7 @@ static int etm_read_reg_w_check(struct reg *reg,
 	fields[1].check_mask = NULL;
 
 	fields[2].num_bits = 1;
-	uint8_t temp2;
+	uint8_t temp2 = 0;
 	fields[2].out_value = &temp2;
 	buf_set_u32(&temp2, 0, 1, 0);
 	fields[2].in_value = NULL;
@@ -614,13 +615,13 @@ static int etm_write_reg(struct reg *reg, uint32_t value)
 	fields[0].in_value = NULL;
 
 	fields[1].num_bits = 7;
-	uint8_t tmp2;
+	uint8_t tmp2 = 0;
 	fields[1].out_value = &tmp2;
 	buf_set_u32(&tmp2, 0, 7, reg_addr);
 	fields[1].in_value = NULL;
 
 	fields[2].num_bits = 1;
-	uint8_t tmp3;
+	uint8_t tmp3 = 0;
 	fields[2].out_value = &tmp3;
 	buf_set_u32(&tmp3, 0, 1, 1);
 	fields[2].in_value = NULL;
@@ -636,15 +637,11 @@ static int etm_write_reg(struct reg *reg, uint32_t value)
 static struct etm_capture_driver *etm_capture_drivers[] = {
 	&etb_capture_driver,
 	&etm_dummy_capture_driver,
-#if BUILD_OOCD_TRACE == 1
-	&oocd_trace_capture_driver,
-#endif
 	NULL
 };
 
 static int etm_read_instruction(struct etm_context *ctx, struct arm_instruction *instruction)
 {
-	int i;
 	int section = -1;
 	size_t size_read;
 	uint32_t opcode;
@@ -654,7 +651,7 @@ static int etm_read_instruction(struct etm_context *ctx, struct arm_instruction 
 		return ERROR_TRACE_IMAGE_UNAVAILABLE;
 
 	/* search for the section the current instruction belongs to */
-	for (i = 0; i < ctx->image->num_sections; i++) {
+	for (unsigned int i = 0; i < ctx->image->num_sections; i++) {
 		if ((ctx->image->sections[i].base_address <= ctx->current_pc) &&
 			(ctx->image->sections[i].base_address + ctx->image->sections[i].size >
 			ctx->current_pc)) {
@@ -1068,8 +1065,8 @@ static int etmv1_analyze_trace(struct etm_context *ctx, struct command_invocatio
 					(instruction.type == ARM_STM)) {
 					int i;
 					for (i = 0; i < 16; i++) {
-						if (instruction.info.load_store_multiple.
-							register_list & (1 << i)) {
+						if (instruction.info.load_store_multiple.register_list
+							& (1 << i)) {
 							uint32_t data;
 							if (etmv1_data(ctx, 4, &data) != 0)
 								return ERROR_ETM_ANALYSIS_FAILED;
@@ -1419,9 +1416,8 @@ COMMAND_HANDLER(handle_etm_config_command)
 
 	for (i = 0; etm_capture_drivers[i]; i++) {
 		if (strcmp(CMD_ARGV[4], etm_capture_drivers[i]->name) == 0) {
-			int retval = register_commands(CMD_CTX, NULL,
-					etm_capture_drivers[i]->commands);
-			if (ERROR_OK != retval) {
+			int retval = register_commands(CMD_CTX, NULL, etm_capture_drivers[i]->commands);
+			if (retval != ERROR_OK) {
 				free(etm_ctx);
 				return retval;
 			}
@@ -1677,15 +1673,15 @@ COMMAND_HANDLER(handle_etm_image_command)
 	}
 
 	etm_ctx->image = malloc(sizeof(struct image));
-	etm_ctx->image->base_address_set = 0;
-	etm_ctx->image->start_address_set = 0;
+	etm_ctx->image->base_address_set = false;
+	etm_ctx->image->start_address_set = false;
 
 	/* a base address isn't always necessary, default to 0x0 (i.e. don't relocate) */
 	if (CMD_ARGC >= 2) {
-		etm_ctx->image->base_address_set = 1;
+		etm_ctx->image->base_address_set = true;
 		COMMAND_PARSE_NUMBER(llong, CMD_ARGV[1], etm_ctx->image->base_address);
 	} else
-		etm_ctx->image->base_address_set = 0;
+		etm_ctx->image->base_address_set = false;
 
 	if (image_open(etm_ctx->image, CMD_ARGV[0],
 		(CMD_ARGC >= 3) ? CMD_ARGV[2] : NULL) != ERROR_OK) {
@@ -1811,7 +1807,7 @@ COMMAND_HANDLER(handle_etm_load_command)
 		fileio_read_u32(file, &etm_ctx->trace_depth);
 	}
 	etm_ctx->trace_data = malloc(sizeof(struct etmv1_trace_data) * etm_ctx->trace_depth);
-	if (etm_ctx->trace_data == NULL) {
+	if (!etm_ctx->trace_data) {
 		command_print(CMD, "not enough memory to perform operation");
 		fileio_close(file);
 		return ERROR_FAIL;
@@ -2110,6 +2106,5 @@ static const struct command_registration etm_exec_command_handlers[] = {
 
 static int etm_register_user_commands(struct command_context *cmd_ctx)
 {
-	struct command *etm_cmd = command_find_in_context(cmd_ctx, "etm");
-	return register_commands(cmd_ctx, etm_cmd, etm_exec_command_handlers);
+	return register_commands(cmd_ctx, "etm", etm_exec_command_handlers);
 }

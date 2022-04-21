@@ -43,7 +43,7 @@
 #include <jtag/swd.h>
 #include <jtag/commands.h>
 
-#include "libusb_common.h"
+#include "libusb_helper.h"
 
 #define VID 0x04b4
 #define PID 0xf139
@@ -95,7 +95,7 @@
 
 struct kitprog {
 	hid_device *hid_handle;
-	struct jtag_libusb_device_handle *usb_handle;
+	struct libusb_device_handle *usb_handle;
 	uint16_t packet_size;
 	uint16_t packet_index;
 	uint8_t *packet_buffer;
@@ -114,7 +114,6 @@ struct pending_transfer_result {
 	void *buffer;
 };
 
-static char *kitprog_serial;
 static bool kitprog_init_acquire_psoc;
 
 static int pending_transfer_count, pending_queue_len;
@@ -158,7 +157,7 @@ static int kitprog_init(void)
 	int retval;
 
 	kitprog_handle = malloc(sizeof(struct kitprog));
-	if (kitprog_handle == NULL) {
+	if (!kitprog_handle) {
 		LOG_ERROR("Failed to allocate memory");
 		return ERROR_FAIL;
 	}
@@ -208,14 +207,14 @@ static int kitprog_init(void)
 	/* Allocate packet buffers and queues */
 	kitprog_handle->packet_size = SWD_MAX_BUFFER_LENGTH;
 	kitprog_handle->packet_buffer = malloc(SWD_MAX_BUFFER_LENGTH);
-	if (kitprog_handle->packet_buffer == NULL) {
+	if (!kitprog_handle->packet_buffer) {
 		LOG_ERROR("Failed to allocate memory for the packet buffer");
 		return ERROR_FAIL;
 	}
 
 	pending_queue_len = SWD_MAX_BUFFER_LENGTH / 5;
 	pending_transfers = malloc(pending_queue_len * sizeof(*pending_transfers));
-	if (pending_transfers == NULL) {
+	if (!pending_transfers) {
 		LOG_ERROR("Failed to allocate memory for the SWD transfer queue");
 		return ERROR_FAIL;
 	}
@@ -227,18 +226,10 @@ static int kitprog_quit(void)
 {
 	kitprog_usb_close();
 
-	if (kitprog_handle->packet_buffer != NULL)
-		free(kitprog_handle->packet_buffer);
-	if (kitprog_handle->serial != NULL)
-		free(kitprog_handle->serial);
-	if (kitprog_handle != NULL)
-		free(kitprog_handle);
-
-	if (kitprog_serial != NULL)
-		free(kitprog_serial);
-
-	if (pending_transfers != NULL)
-		free(pending_transfers);
+	free(kitprog_handle->packet_buffer);
+	free(kitprog_handle->serial);
+	free(kitprog_handle);
+	free(pending_transfers);
 
 	return ERROR_OK;
 }
@@ -263,7 +254,7 @@ static int kitprog_get_usb_serial(void)
 
 	/* Allocate memory for the serial number */
 	kitprog_handle->serial = calloc(retval + 1, sizeof(char));
-	if (kitprog_handle->serial == NULL) {
+	if (!kitprog_handle->serial) {
 		LOG_ERROR("Failed to allocate memory for the serial number");
 		return ERROR_FAIL;
 	}
@@ -279,8 +270,7 @@ static int kitprog_usb_open(void)
 	const uint16_t vids[] = { VID, 0 };
 	const uint16_t pids[] = { PID, 0 };
 
-	if (jtag_libusb_open(vids, pids, kitprog_serial,
-			&kitprog_handle->usb_handle) != ERROR_OK) {
+	if (jtag_libusb_open(vids, pids, &kitprog_handle->usb_handle, NULL) != ERROR_OK) {
 		LOG_ERROR("Failed to open or find the device");
 		return ERROR_FAIL;
 	}
@@ -292,7 +282,7 @@ static int kitprog_usb_open(void)
 	/* Convert the ASCII serial number into a (wchar_t *) */
 	size_t len = strlen(kitprog_handle->serial);
 	wchar_t *hid_serial = calloc(len + 1, sizeof(wchar_t));
-	if (hid_serial == NULL) {
+	if (!hid_serial) {
 		LOG_ERROR("Failed to allocate memory for the serial number");
 		return ERROR_FAIL;
 	}
@@ -305,13 +295,13 @@ static int kitprog_usb_open(void)
 	/* Use HID for the KitBridge interface */
 	kitprog_handle->hid_handle = hid_open(VID, PID, hid_serial);
 	free(hid_serial);
-	if (kitprog_handle->hid_handle == NULL) {
+	if (!kitprog_handle->hid_handle) {
 		LOG_ERROR("Failed to open KitBridge (HID) interface");
 		return ERROR_FAIL;
 	}
 
 	/* Claim the KitProg Programmer (bulk transfer) interface */
-	if (jtag_libusb_claim_interface(kitprog_handle->usb_handle, 1) != ERROR_OK) {
+	if (libusb_claim_interface(kitprog_handle->usb_handle, 1) != ERROR_OK) {
 		LOG_ERROR("Failed to claim KitProg Programmer (bulk transfer) interface");
 		return ERROR_FAIL;
 	}
@@ -321,7 +311,7 @@ static int kitprog_usb_open(void)
 
 static void kitprog_usb_close(void)
 {
-	if (kitprog_handle->hid_handle != NULL) {
+	if (kitprog_handle->hid_handle) {
 		hid_close(kitprog_handle->hid_handle);
 		hid_exit();
 	}
@@ -358,7 +348,7 @@ static int kitprog_get_version(void)
 	unsigned char command[3] = {HID_TYPE_START | HID_TYPE_WRITE, 0x00, HID_COMMAND_VERSION};
 	unsigned char data[64];
 
-	ret = kitprog_hid_command(command, sizeof command, data, sizeof data);
+	ret = kitprog_hid_command(command, sizeof(command), data, sizeof(data));
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -376,7 +366,7 @@ static int kitprog_get_millivolts(void)
 	unsigned char command[3] = {HID_TYPE_START | HID_TYPE_READ, 0x00, HID_COMMAND_POWER};
 	unsigned char data[64];
 
-	ret = kitprog_hid_command(command, sizeof command, data, sizeof data);
+	ret = kitprog_hid_command(command, sizeof(command), data, sizeof(data));
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -603,10 +593,10 @@ static int kitprog_generic_acquire(void)
 	 * will take the Cortex-M3 out of reset and enable debugging.
 	 */
 	for (int i = 0; i < 2; i++) {
-		for (uint8_t j = 0; j < sizeof devices && acquire_count == i; j++) {
+		for (uint8_t j = 0; j < sizeof(devices) && acquire_count == i; j++) {
 			retval = kitprog_acquire_psoc(devices[j], ACQUIRE_MODE_RESET, 3);
 			if (retval != ERROR_OK) {
-				LOG_DEBUG("Aquisition function failed for device 0x%02x.", devices[j]);
+				LOG_DEBUG("Acquisition function failed for device 0x%02x.", devices[j]);
 				return retval;
 			}
 
@@ -632,13 +622,13 @@ static int kitprog_swd_init(void)
 
 static void kitprog_swd_write_reg(uint8_t cmd, uint32_t value, uint32_t ap_delay_clk)
 {
-	assert(!(cmd & SWD_CMD_RnW));
+	assert(!(cmd & SWD_CMD_RNW));
 	kitprog_swd_queue_cmd(cmd, NULL, value);
 }
 
 static void kitprog_swd_read_reg(uint8_t cmd, uint32_t *value, uint32_t ap_delay_clk)
 {
-	assert(cmd & SWD_CMD_RnW);
+	assert(cmd & SWD_CMD_RNW);
 	kitprog_swd_queue_cmd(cmd, value, 0);
 }
 
@@ -706,8 +696,8 @@ static int kitprog_swd_run_queue(void)
 			 * cmsis_dap_cmd_DAP_SWD_Configure() in
 			 * cmsis_dap_init().
 			 */
-			if (!(cmd & SWD_CMD_RnW) &&
-				!(cmd & SWD_CMD_APnDP) &&
+			if (!(cmd & SWD_CMD_RNW) &&
+				!(cmd & SWD_CMD_APNDP) &&
 				(cmd & SWD_CMD_A32) >> 1 == DP_CTRL_STAT &&
 				(data & CORUNDETECT)) {
 				LOG_DEBUG("refusing to enable sticky overrun detection");
@@ -715,13 +705,13 @@ static int kitprog_swd_run_queue(void)
 			}
 
 			LOG_DEBUG_IO("%s %s reg %x %"PRIx32,
-					cmd & SWD_CMD_APnDP ? "AP" : "DP",
-					cmd & SWD_CMD_RnW ? "read" : "write",
+					cmd & SWD_CMD_APNDP ? "AP" : "DP",
+					cmd & SWD_CMD_RNW ? "read" : "write",
 				  (cmd & SWD_CMD_A32) >> 1, data);
 
 			buffer[write_count++] = (cmd | SWD_CMD_START | SWD_CMD_PARK) & ~SWD_CMD_STOP;
 			read_count++;
-			if (!(cmd & SWD_CMD_RnW)) {
+			if (!(cmd & SWD_CMD_RNW)) {
 				buffer[write_count++] = (data) & 0xff;
 				buffer[write_count++] = (data >> 8) & 0xff;
 				buffer[write_count++] = (data >> 16) & 0xff;
@@ -731,14 +721,14 @@ static int kitprog_swd_run_queue(void)
 			}
 		}
 
-		ret = jtag_libusb_bulk_write(kitprog_handle->usb_handle,
-				BULK_EP_OUT, (char *)buffer, write_count, 0);
-		if (ret > 0) {
-			queued_retval = ERROR_OK;
-		} else {
+		if (jtag_libusb_bulk_write(kitprog_handle->usb_handle,
+					   BULK_EP_OUT, (char *)buffer,
+					   write_count, 0, &ret)) {
 			LOG_ERROR("Bulk write failed");
 			queued_retval = ERROR_FAIL;
 			break;
+		} else {
+			queued_retval = ERROR_OK;
 		}
 
 		/* KitProg firmware does not send a zero length packet
@@ -746,7 +736,7 @@ static int kitprog_swd_run_queue(void)
 		 * size (64 bytes) as required by the USB specification.
 		 * Therefore libusb would wait for continuation of transmission.
 		 * Workaround: Limit bulk read size to expected number of bytes
-		 * for problematic tranfer sizes. Otherwise use the maximum buffer
+		 * for problematic transfer sizes. Otherwise use the maximum buffer
 		 * size here because the KitProg sometimes doesn't like bulk reads
 		 * of fewer than 62 bytes. (?!?!)
 		 */
@@ -754,22 +744,21 @@ static int kitprog_swd_run_queue(void)
 		if (read_count % 64 == 0)
 			read_count_workaround = read_count;
 
-		ret = jtag_libusb_bulk_read(kitprog_handle->usb_handle,
+		if (jtag_libusb_bulk_read(kitprog_handle->usb_handle,
 				BULK_EP_IN | LIBUSB_ENDPOINT_IN, (char *)buffer,
-				read_count_workaround, 1000);
-		if (ret > 0) {
+				read_count_workaround, 1000, &ret)) {
+			LOG_ERROR("Bulk read failed");
+			queued_retval = ERROR_FAIL;
+			break;
+		} else {
 			/* Handle garbage data by offsetting the initial read index */
 			if ((unsigned int)ret > read_count)
 				read_index = ret - read_count;
 			queued_retval = ERROR_OK;
-		} else {
-			LOG_ERROR("Bulk read failed");
-			queued_retval = ERROR_FAIL;
-			break;
 		}
 
 		for (int i = 0; i < pending_transfer_count; i++) {
-			if (pending_transfers[i].cmd & SWD_CMD_RnW) {
+			if (pending_transfers[i].cmd & SWD_CMD_RNW) {
 				uint32_t data = le_to_h_u32(&buffer[read_index]);
 
 				LOG_DEBUG_IO("Read result: %"PRIx32, data);
@@ -810,7 +799,7 @@ static void kitprog_swd_queue_cmd(uint8_t cmd, uint32_t *dst, uint32_t data)
 
 	pending_transfers[pending_transfer_count].data = data;
 	pending_transfers[pending_transfer_count].cmd = cmd;
-	if (cmd & SWD_CMD_RnW) {
+	if (cmd & SWD_CMD_RNW) {
 		/* Queue a read transaction */
 		pending_transfers[pending_transfer_count].buffer = dst;
 	}
@@ -819,11 +808,16 @@ static void kitprog_swd_queue_cmd(uint8_t cmd, uint32_t *dst, uint32_t data)
 
 /*************** jtag lowlevel functions ********************/
 
-static void kitprog_execute_reset(struct jtag_command *cmd)
+static int kitprog_reset(int trst, int srst)
 {
 	int retval = ERROR_OK;
 
-	if (cmd->cmd.reset->srst == 1) {
+	if (trst == 1) {
+		LOG_ERROR("KitProg: Interface has no TRST");
+		return ERROR_FAIL;
+	}
+
+	if (srst == 1) {
 		retval = kitprog_reset_target();
 		/* Since the previous command also disables SWCLK output, we need to send an
 		 * SWD bus reset command to re-enable it. For some reason, running
@@ -836,38 +830,7 @@ static void kitprog_execute_reset(struct jtag_command *cmd)
 
 	if (retval != ERROR_OK)
 		LOG_ERROR("KitProg: Interface reset failed");
-}
-
-static void kitprog_execute_sleep(struct jtag_command *cmd)
-{
-	jtag_sleep(cmd->cmd.sleep->us);
-}
-
-static void kitprog_execute_command(struct jtag_command *cmd)
-{
-	switch (cmd->type) {
-		case JTAG_RESET:
-			kitprog_execute_reset(cmd);
-			break;
-		case JTAG_SLEEP:
-			kitprog_execute_sleep(cmd);
-			break;
-		default:
-			LOG_ERROR("BUG: unknown JTAG command type encountered");
-			exit(-1);
-	}
-}
-
-static int kitprog_execute_queue(void)
-{
-	struct jtag_command *cmd = jtag_command_queue;
-
-	while (cmd != NULL) {
-		kitprog_execute_command(cmd);
-		cmd = cmd->next;
-	}
-
-	return ERROR_OK;
+	return retval;
 }
 
 COMMAND_HANDLER(kitprog_handle_info_command)
@@ -883,22 +846,6 @@ COMMAND_HANDLER(kitprog_handle_acquire_psoc_command)
 	int retval = kitprog_generic_acquire();
 
 	return retval;
-}
-
-COMMAND_HANDLER(kitprog_handle_serial_command)
-{
-	if (CMD_ARGC == 1) {
-		kitprog_serial = strdup(CMD_ARGV[0]);
-		if (kitprog_serial == NULL) {
-			LOG_ERROR("Failed to allocate memory for the serial number");
-			return ERROR_FAIL;
-		}
-	} else {
-		LOG_ERROR("expected exactly one argument to kitprog_serial <serial-number>");
-		return ERROR_FAIL;
-	}
-
-	return ERROR_OK;
 }
 
 COMMAND_HANDLER(kitprog_handle_init_acquire_psoc_command)
@@ -935,13 +882,6 @@ static const struct command_registration kitprog_command_handlers[] = {
 		.chain = kitprog_subcommand_handlers,
 	},
 	{
-		.name = "kitprog_serial",
-		.handler = &kitprog_handle_serial_command,
-		.mode = COMMAND_CONFIG,
-		.help = "set the serial number of the adapter",
-		.usage = "serial_string",
-	},
-	{
 		.name = "kitprog_init_acquire_psoc",
 		.handler = &kitprog_handle_init_acquire_psoc_command,
 		.mode = COMMAND_CONFIG,
@@ -961,12 +901,14 @@ static const struct swd_driver kitprog_swd = {
 
 static const char * const kitprog_transports[] = { "swd", NULL };
 
-struct jtag_interface kitprog_interface = {
+struct adapter_driver kitprog_adapter_driver = {
 	.name = "kitprog",
-	.commands = kitprog_command_handlers,
 	.transports = kitprog_transports,
-	.swd = &kitprog_swd,
-	.execute_queue = kitprog_execute_queue,
+	.commands = kitprog_command_handlers,
+
 	.init = kitprog_init,
-	.quit = kitprog_quit
+	.quit = kitprog_quit,
+	.reset = kitprog_reset,
+
+	.swd_ops = &kitprog_swd,
 };

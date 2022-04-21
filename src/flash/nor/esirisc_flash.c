@@ -109,7 +109,6 @@ static const struct command_registration esirisc_flash_command_handlers[];
 FLASH_BANK_COMMAND_HANDLER(esirisc_flash_bank_command)
 {
 	struct esirisc_flash_bank *esirisc_info;
-	struct command *esirisc_cmd;
 
 	if (CMD_ARGC < 9)
 		return ERROR_COMMAND_SYNTAX_ERROR;
@@ -123,8 +122,7 @@ FLASH_BANK_COMMAND_HANDLER(esirisc_flash_bank_command)
 	bank->driver_priv = esirisc_info;
 
 	/* register commands using existing esirisc context */
-	esirisc_cmd = command_find_in_context(CMD_CTX, "esirisc");
-	register_commands(CMD_CTX, esirisc_cmd, esirisc_flash_command_handlers);
+	register_commands(CMD_CTX, "esirisc", esirisc_flash_command_handlers);
 
 	return ERROR_OK;
 }
@@ -252,7 +250,8 @@ static int esirisc_flash_recall(struct flash_bank *bank)
 	return esirisc_flash_control(bank, CONTROL_R);
 }
 
-static int esirisc_flash_erase(struct flash_bank *bank, int first, int last)
+static int esirisc_flash_erase(struct flash_bank *bank, unsigned int first,
+		unsigned int last)
 {
 	struct esirisc_flash_bank *esirisc_info = bank->driver_priv;
 	struct target *target = bank->target;
@@ -263,7 +262,7 @@ static int esirisc_flash_erase(struct flash_bank *bank, int first, int last)
 
 	(void)esirisc_flash_disable_protect(bank);
 
-	for (int page = first; page < last; ++page) {
+	for (unsigned int page = first; page < last; ++page) {
 		uint32_t address = page * FLASH_PAGE_SIZE;
 
 		target_write_u32(target, esirisc_info->cfg + ADDRESS, address);
@@ -488,12 +487,12 @@ static int esirisc_flash_auto_probe(struct flash_bank *bank)
 	return esirisc_flash_probe(bank);
 }
 
-static int esirisc_flash_info(struct flash_bank *bank, char *buf, int buf_size)
+static int esirisc_flash_info(struct flash_bank *bank, struct command_invocation *cmd)
 {
 	struct esirisc_flash_bank *esirisc_info = bank->driver_priv;
 
-	snprintf(buf, buf_size,
-			"%4s cfg at 0x%" PRIx32 ", clock %" PRId32 ", wait_states %" PRId32,
+	command_print_sameline(cmd,
+			"%4s cfg at 0x%" PRIx32 ", clock %" PRIu32 ", wait_states %" PRIu32,
 			"",	/* align with first line */
 			esirisc_info->cfg,
 			esirisc_info->clock,

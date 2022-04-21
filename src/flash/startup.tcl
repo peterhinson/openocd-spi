@@ -6,6 +6,7 @@
 # optional args: verify, reset, exit and address
 #
 
+lappend _telnet_autocomplete_skip program_error
 proc program_error {description exit} {
 	if {$exit == 1} {
 		echo $description
@@ -101,31 +102,25 @@ proc program {filename args} {
 add_help_text program "write an image to flash, address is only required for binary images. verify, reset, exit are optional"
 add_usage_text program "<filename> \[address\] \[pre-verify\] \[verify\] \[reset\] \[exit\]"
 
-# stm32f0x uses the same flash driver as the stm32f1x
-# this alias enables the use of either name.
-proc stm32f0x args {
-	eval stm32f1x $args
-}
+# stm32[f0x|f3x] uses the same flash driver as the stm32f1x
+proc stm32f0x args { eval stm32f1x $args }
+proc stm32f3x args { eval stm32f1x $args }
 
-# stm32f3x uses the same flash driver as the stm32f1x
-# this alias enables the use of either name.
-proc stm32f3x args {
-	eval stm32f1x $args
-}
+# stm32[f4x|f7x] uses the same flash driver as the stm32f2x
+proc stm32f4x args { eval stm32f2x $args }
+proc stm32f7x args { eval stm32f2x $args }
 
-# stm32f4x uses the same flash driver as the stm32f2x
-# this alias enables the use of either name.
-proc stm32f4x args {
-	eval stm32f2x $args
-}
+# stm32lx driver supports both STM32 L0 and L1 devices
+proc stm32l0x args { eval stm32lx $args }
+proc stm32l1x args { eval stm32lx $args }
 
-# ease migration to updated flash driver
-proc stm32x args {
-	echo "DEPRECATED! use 'stm32f1x $args' not 'stm32x $args'"
-	eval stm32f1x $args
-}
+# stm32[g0|g4|l5|u5|wb|wl] uses the same flash driver as the stm32l4x
+proc stm32g0x args { eval stm32l4x $args }
+proc stm32g4x args { eval stm32l4x $args }
+proc stm32l5x args { eval stm32l4x $args }
+proc stm32u5x args { eval stm32l4x $args }
+proc stm32wbx args { eval stm32l4x $args }
+proc stm32wlx args { eval stm32l4x $args }
 
-proc stm32f2xxx args {
-	echo "DEPRECATED! use 'stm32f2x $args' not 'stm32f2xxx $args'"
-	eval stm32f2x $args
-}
+# gd32e23x uses the same flash driver as the stm32f1x
+proc gd32e23x args { eval stm32f1x $args }

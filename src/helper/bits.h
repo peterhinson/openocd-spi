@@ -24,11 +24,16 @@
 #ifndef OPENOCD_HELPER_BITS_H
 #define OPENOCD_HELPER_BITS_H
 
+#include <helper/replacements.h>
 #include <helper/types.h>
 
 #define BIT(nr)                     (1UL << (nr))
+#define BIT_ULL(nr)                 (1ULL << (nr))
 #define BITS_PER_BYTE               8
 #define BITS_PER_LONG               (BITS_PER_BYTE * sizeof(long))
+#define BITS_PER_LONG_LONG          (BITS_PER_BYTE * sizeof(long long))
+#define GENMASK(h, l)               (((~0UL) - (1UL << (l)) + 1) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
+#define GENMASK_ULL(h, l)           (((~0ULL) - (1ULL << (l)) + 1) & (~0ULL >> (BITS_PER_LONG_LONG - 1 - (h))))
 #define BITS_TO_LONGS(nr)           DIV_ROUND_UP(nr, BITS_PER_BYTE * sizeof(long))
 #define BIT_MASK(nr)                (1UL << ((nr) % BITS_PER_LONG))
 #define BIT_WORD(nr)                ((nr) / BITS_PER_LONG)
@@ -36,8 +41,8 @@
 
 /**
  * bitmap_zero - Clears all the bits in memory
- * @dst: the address of the bitmap
- * @nbits: the number of bits to clear
+ * @param dst the address of the bitmap
+ * @param nbits the number of bits to clear
  */
 static inline void bitmap_zero(unsigned long *dst, unsigned int nbits)
 {
@@ -47,8 +52,8 @@ static inline void bitmap_zero(unsigned long *dst, unsigned int nbits)
 
 /**
  * clear_bit - Clear a bit in memory
- * @nr: the bit to set
- * @addr: the address to start counting from
+ * @param nr the bit to set
+ * @param addr the address to start counting from
  */
 static inline void clear_bit(unsigned int nr, volatile unsigned long *addr)
 {
@@ -60,8 +65,8 @@ static inline void clear_bit(unsigned int nr, volatile unsigned long *addr)
 
 /**
  * set_bit - Set a bit in memory
- * @nr: the bit to set
- * @addr: the address to start counting from
+ * @param nr the bit to set
+ * @param addr the address to start counting from
  */
 static inline void set_bit(unsigned int nr, volatile unsigned long *addr)
 {
@@ -73,8 +78,8 @@ static inline void set_bit(unsigned int nr, volatile unsigned long *addr)
 
 /**
  * test_bit - Determine whether a bit is set
- * @nr: bit number to test
- * @addr: Address to start counting from
+ * @param nr bit number to test
+ * @param addr Address to start counting from
  */
 static inline int test_bit(unsigned int nr, const volatile unsigned long *addr)
 {

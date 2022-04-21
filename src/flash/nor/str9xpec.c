@@ -74,13 +74,14 @@ struct str9xpec_flash_controller {
 	uint8_t options[8];
 };
 
-static int str9xpec_erase_area(struct flash_bank *bank, int first, int last);
+static int str9xpec_erase_area(struct flash_bank *bank, unsigned int first,
+		unsigned int last);
 static int str9xpec_set_address(struct flash_bank *bank, uint8_t sector);
 static int str9xpec_write_options(struct flash_bank *bank);
 
 static int str9xpec_set_instr(struct jtag_tap *tap, uint32_t new_instr, tap_state_t end_state)
 {
-	if (tap == NULL)
+	if (!tap)
 		return ERROR_TARGET_INVALID;
 
 	if (buf_get_u32(tap->cur_instr, 0, tap->ir_length) != new_instr) {
@@ -210,7 +211,7 @@ static int str9xpec_build_block_list(struct flash_bank *bank)
 	struct str9xpec_flash_controller *str9xpec_info = bank->driver_priv;
 
 	int i;
-	int num_sectors;
+	unsigned int num_sectors;
 	int b0_sectors = 0, b1_sectors = 0;
 	uint32_t offset = 0;
 	int b1_size = 0x2000;
@@ -303,12 +304,12 @@ FLASH_BANK_COMMAND_HANDLER(str9xpec_flash_bank_command)
 	return ERROR_OK;
 }
 
-static int str9xpec_blank_check(struct flash_bank *bank, int first, int last)
+static int str9xpec_blank_check(struct flash_bank *bank, unsigned int first,
+		unsigned int last)
 {
 	struct scan_field field;
 	uint8_t status;
 	struct jtag_tap *tap;
-	int i;
 	uint8_t *buffer = NULL;
 
 	struct str9xpec_flash_controller *str9xpec_info = bank->driver_priv;
@@ -323,9 +324,9 @@ static int str9xpec_blank_check(struct flash_bank *bank, int first, int last)
 
 	buffer = calloc(DIV_ROUND_UP(64, 8), 1);
 
-	LOG_DEBUG("blank check: first_bank: %i, last_bank: %i", first, last);
+	LOG_DEBUG("blank check: first_bank: %u, last_bank: %u", first, last);
 
-	for (i = first; i <= last; i++)
+	for (unsigned int i = first; i <= last; i++)
 		buf_set_u32(buffer, str9xpec_info->sector_bits[i], 1, 1);
 
 	/* execute ISC_BLANK_CHECK command */
@@ -348,7 +349,7 @@ static int str9xpec_blank_check(struct flash_bank *bank, int first, int last)
 
 	status = str9xpec_isc_status(tap);
 
-	for (i = first; i <= last; i++) {
+	for (unsigned int i = first; i <= last; i++) {
 		if (buf_get_u32(buffer, str9xpec_info->sector_bits[i], 1))
 			bank->sectors[i].is_erased = 0;
 		else
@@ -367,13 +368,12 @@ static int str9xpec_blank_check(struct flash_bank *bank, int first, int last)
 static int str9xpec_protect_check(struct flash_bank *bank)
 {
 	uint8_t status;
-	int i;
 
 	struct str9xpec_flash_controller *str9xpec_info = bank->driver_priv;
 
 	status = str9xpec_read_config(bank);
 
-	for (i = 0; i < bank->num_sectors; i++) {
+	for (unsigned int i = 0; i < bank->num_sectors; i++) {
 		if (buf_get_u32(str9xpec_info->options, str9xpec_info->sector_bits[i], 1))
 			bank->sectors[i].is_protected = 1;
 		else
@@ -385,12 +385,12 @@ static int str9xpec_protect_check(struct flash_bank *bank)
 	return ERROR_OK;
 }
 
-static int str9xpec_erase_area(struct flash_bank *bank, int first, int last)
+static int str9xpec_erase_area(struct flash_bank *bank, unsigned int first,
+		unsigned int last)
 {
 	struct scan_field field;
 	uint8_t status;
 	struct jtag_tap *tap;
-	int i;
 	uint8_t *buffer = NULL;
 
 	struct str9xpec_flash_controller *str9xpec_info = bank->driver_priv;
@@ -405,17 +405,17 @@ static int str9xpec_erase_area(struct flash_bank *bank, int first, int last)
 
 	buffer = calloc(DIV_ROUND_UP(64, 8), 1);
 
-	LOG_DEBUG("erase: first_bank: %i, last_bank: %i", first, last);
+	LOG_DEBUG("erase: first_bank: %u, last_bank: %u", first, last);
 
 	/* last bank: 0xFF signals a full erase (unlock complete device) */
 	/* last bank: 0xFE signals a option byte erase */
 	if (last == 0xFF) {
-		for (i = 0; i < 64; i++)
+		for (unsigned int i = 0; i < 64; i++)
 			buf_set_u32(buffer, i, 1, 1);
 	} else if (last == 0xFE)
 		buf_set_u32(buffer, 49, 1, 1);
 	else {
-		for (i = first; i <= last; i++)
+		for (unsigned int i = first; i <= last; i++)
 			buf_set_u32(buffer, str9xpec_info->sector_bits[i], 1, 1);
 	}
 
@@ -444,7 +444,8 @@ static int str9xpec_erase_area(struct flash_bank *bank, int first, int last)
 	return status;
 }
 
-static int str9xpec_erase(struct flash_bank *bank, int first, int last)
+static int str9xpec_erase(struct flash_bank *bank, unsigned int first,
+		unsigned int last)
 {
 	int status;
 
@@ -504,10 +505,10 @@ static int str9xpec_unlock_device(struct flash_bank *bank)
 	return status;
 }
 
-static int str9xpec_protect(struct flash_bank *bank, int set, int first, int last)
+static int str9xpec_protect(struct flash_bank *bank, int set,
+		unsigned int first, unsigned int last)
 {
 	uint8_t status;
-	int i;
 
 	struct str9xpec_flash_controller *str9xpec_info = bank->driver_priv;
 
@@ -516,7 +517,7 @@ static int str9xpec_protect(struct flash_bank *bank, int set, int first, int las
 	if ((status & ISC_STATUS_ERROR) != STR9XPEC_ISC_SUCCESS)
 		return ERROR_FLASH_OPERATION_FAILED;
 
-	LOG_DEBUG("protect: first_bank: %i, last_bank: %i", first, last);
+	LOG_DEBUG("protect: first_bank: %u, last_bank: %u", first, last);
 
 	/* last bank: 0xFF signals a full device protect */
 	if (last == 0xFF) {
@@ -527,7 +528,7 @@ static int str9xpec_protect(struct flash_bank *bank, int set, int first, int las
 			status = str9xpec_unlock_device(bank);
 		}
 	} else {
-		for (i = first; i <= last; i++) {
+		for (unsigned int i = first; i <= last; i++) {
 			if (set)
 				buf_set_u32(str9xpec_info->options, str9xpec_info->sector_bits[i], 1, 1);
 			else
@@ -575,9 +576,8 @@ static int str9xpec_write(struct flash_bank *bank, const uint8_t *buffer,
 	struct jtag_tap *tap;
 	struct scan_field field;
 	uint8_t *scanbuf;
-	int i;
-	int first_sector = 0;
-	int last_sector = 0;
+	unsigned int first_sector = 0;
+	unsigned int last_sector = 0;
 
 	tap = str9xpec_info->tap;
 
@@ -592,7 +592,7 @@ static int str9xpec_write(struct flash_bank *bank, const uint8_t *buffer,
 		return ERROR_FLASH_DST_BREAKS_ALIGNMENT;
 	}
 
-	for (i = 0; i < bank->num_sectors; i++) {
+	for (unsigned int i = 0; i < bank->num_sectors; i++) {
 		uint32_t sec_start = bank->sectors[i].offset;
 		uint32_t sec_end = sec_start + bank->sectors[i].size;
 
@@ -621,7 +621,7 @@ static int str9xpec_write(struct flash_bank *bank, const uint8_t *buffer,
 
 	LOG_DEBUG("ISC_PROGRAM");
 
-	for (i = first_sector; i <= last_sector; i++) {
+	for (unsigned int i = first_sector; i <= last_sector; i++) {
 		str9xpec_set_address(bank, str9xpec_info->sector_bits[i]);
 
 		dwords_remaining = dwords_remaining < (bank->sectors[i].size/8)
@@ -727,7 +727,7 @@ COMMAND_HANDLER(str9xpec_handle_part_id_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	str9xpec_info = bank->driver_priv;
@@ -768,7 +768,7 @@ COMMAND_HANDLER(str9xpec_handle_flash_options_read_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	str9xpec_info = bank->driver_priv;
@@ -877,7 +877,7 @@ COMMAND_HANDLER(str9xpec_handle_flash_options_write_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	status = str9xpec_write_options(bank);
@@ -901,7 +901,7 @@ COMMAND_HANDLER(str9xpec_handle_flash_options_cmap_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	str9xpec_info = bank->driver_priv;
@@ -923,7 +923,7 @@ COMMAND_HANDLER(str9xpec_handle_flash_options_lvdthd_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	str9xpec_info = bank->driver_priv;
@@ -945,7 +945,7 @@ COMMAND_HANDLER(str9xpec_handle_flash_options_lvdsel_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	str9xpec_info = bank->driver_priv;
@@ -967,7 +967,7 @@ COMMAND_HANDLER(str9xpec_handle_flash_options_lvdwarn_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	str9xpec_info = bank->driver_priv;
@@ -989,7 +989,7 @@ COMMAND_HANDLER(str9xpec_handle_flash_lock_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	status = str9xpec_lock_device(bank);
@@ -1009,7 +1009,7 @@ COMMAND_HANDLER(str9xpec_handle_flash_unlock_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	status = str9xpec_unlock_device(bank);
@@ -1036,26 +1036,26 @@ COMMAND_HANDLER(str9xpec_handle_flash_enable_turbo_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	str9xpec_info = bank->driver_priv;
 
 	/* remove arm core from chain - enter turbo mode */
 	tap0 = str9xpec_info->tap;
-	if (tap0 == NULL) {
+	if (!tap0) {
 		/* things are *WRONG* */
 		command_print(CMD, "**STR9FLASH** (tap0) invalid chain?");
 		return ERROR_FAIL;
 	}
 	tap1 = tap0->next_tap;
-	if (tap1 == NULL) {
+	if (!tap1) {
 		/* things are *WRONG* */
 		command_print(CMD, "**STR9FLASH** (tap1) invalid chain?");
 		return ERROR_FAIL;
 	}
 	tap2 = tap1->next_tap;
-	if (tap2 == NULL) {
+	if (!tap2) {
 		/* things are *WRONG* */
 		command_print(CMD, "**STR9FLASH** (tap2) invalid chain?");
 		return ERROR_FAIL;
@@ -1083,13 +1083,13 @@ COMMAND_HANDLER(str9xpec_handle_flash_disable_turbo_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	str9xpec_info = bank->driver_priv;
 	tap = str9xpec_info->tap;
 
-	if (tap == NULL)
+	if (!tap)
 		return ERROR_FAIL;
 
 	/* exit turbo mode via RESET */

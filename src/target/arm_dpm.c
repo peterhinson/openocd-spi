@@ -50,7 +50,7 @@
 
 /* Read coprocessor */
 static int dpm_mrc(struct target *target, int cpnum,
-	uint32_t op1, uint32_t op2, uint32_t CRn, uint32_t CRm,
+	uint32_t op1, uint32_t op2, uint32_t crn, uint32_t crm,
 	uint32_t *value)
 {
 	struct arm *arm = target_to_arm(target);
@@ -62,12 +62,12 @@ static int dpm_mrc(struct target *target, int cpnum,
 		return retval;
 
 	LOG_DEBUG("MRC p%d, %d, r0, c%d, c%d, %d", cpnum,
-		(int) op1, (int) CRn,
-		(int) CRm, (int) op2);
+		(int) op1, (int) crn,
+		(int) crm, (int) op2);
 
 	/* read coprocessor register into R0; return via DCC */
 	retval = dpm->instr_read_data_r0(dpm,
-			ARMV4_5_MRC(cpnum, op1, 0, CRn, CRm, op2),
+			ARMV4_5_MRC(cpnum, op1, 0, crn, crm, op2),
 			value);
 
 	/* (void) */ dpm->finish(dpm);
@@ -75,7 +75,7 @@ static int dpm_mrc(struct target *target, int cpnum,
 }
 
 static int dpm_mcr(struct target *target, int cpnum,
-	uint32_t op1, uint32_t op2, uint32_t CRn, uint32_t CRm,
+	uint32_t op1, uint32_t op2, uint32_t crn, uint32_t crm,
 	uint32_t value)
 {
 	struct arm *arm = target_to_arm(target);
@@ -87,12 +87,12 @@ static int dpm_mcr(struct target *target, int cpnum,
 		return retval;
 
 	LOG_DEBUG("MCR p%d, %d, r0, c%d, c%d, %d", cpnum,
-		(int) op1, (int) CRn,
-		(int) CRm, (int) op2);
+		(int) op1, (int) crn,
+		(int) crm, (int) op2);
 
 	/* read DCC into r0; then write coprocessor register from R0 */
 	retval = dpm->instr_write_data_r0(dpm,
-			ARMV4_5_MCR(cpnum, op1, 0, CRn, CRm, op2),
+			ARMV4_5_MCR(cpnum, op1, 0, crn, crm, op2),
 			value);
 
 	/* (void) */ dpm->finish(dpm);
@@ -145,6 +145,9 @@ static int dpm_read_reg_u64(struct arm_dpm *dpm, struct reg *r, unsigned regnum)
 			retval = dpm->instr_read_data_r0(dpm,
 				ARMV4_5_VMOV(1, 1, 0, ((regnum - ARM_VFP_V3_D0) >> 4),
 				((regnum - ARM_VFP_V3_D0) & 0xf)), &value_r0);
+			if (retval != ERROR_OK)
+				break;
+
 			/* read r1 via dcc */
 			retval = dpm->instr_read_data_dcc(dpm,
 				ARMV4_5_MCR(14, 0, 1, 0, 5, 0),
@@ -203,13 +206,12 @@ int arm_dpm_read_reg(struct arm_dpm *dpm, struct reg *r, unsigned regnum)
 					LOG_WARNING("Jazelle PC adjustment unknown");
 					break;
 				default:
-					LOG_WARNING("unknow core state");
+					LOG_WARNING("unknown core state");
 					break;
 			}
 			break;
 		case ARM_VFP_V3_D0 ... ARM_VFP_V3_D31:
 			return dpm_read_reg_u64(dpm, r, regnum);
-			break;
 		case ARM_VFP_V3_FPSCR:
 			/* "VMRS r0, FPSCR"; then return via DCC */
 			retval = dpm->instr_read_data_r0(dpm,
@@ -248,6 +250,9 @@ static int dpm_write_reg_u64(struct arm_dpm *dpm, struct reg *r, unsigned regnum
 			retval = dpm->instr_write_data_dcc(dpm,
 				ARMV4_5_MRC(14, 0, 1, 0, 5, 0),
 				value_r1);
+			if (retval != ERROR_OK)
+				break;
+
 			/* write value_r0 to r0 via dcc then,
 			 * move to double word register from r0:r1: "vmov vm, r0, r1"
 			 */
@@ -288,7 +293,6 @@ static int dpm_write_reg(struct arm_dpm *dpm, struct reg *r, unsigned regnum)
 			break;
 		case ARM_VFP_V3_D0 ... ARM_VFP_V3_D31:
 			return dpm_write_reg_u64(dpm, r, regnum);
-			break;
 		case ARM_VFP_V3_FPSCR:
 			/* move to r0 from DCC, then "VMSR FPSCR, r0" */
 			retval = dpm->instr_write_data_r0(dpm,
@@ -331,7 +335,7 @@ static int dpm_write_pc_core_state(struct arm_dpm *dpm, struct reg *r)
 }
 
 /**
- * Read basic registers of the the current context:  R0 to R15, and CPSR;
+ * Read basic registers of the current context:  R0 to R15, and CPSR;
  * sets the core mode (such as USR or IRQ) and state (such as ARM or Thumb).
  * In normal operation this is called on entry to halting debug state,
  * possibly after some other operations supporting restore of debug state
@@ -394,7 +398,7 @@ fail:
  * or running debugger code.
  */
 static int dpm_maybe_update_bpwp(struct arm_dpm *dpm, bool bpwp,
-	struct dpm_bpwp *xp, int *set_p)
+	struct dpm_bpwp *xp, bool *set_p)
 {
 	int retval = ERROR_OK;
 	bool disable;
@@ -469,7 +473,7 @@ int arm_dpm_write_dirty_registers(struct arm_dpm *dpm, bool bpwp)
 			struct breakpoint *bp = dbp->bp;
 
 			retval = dpm_maybe_update_bpwp(dpm, bpwp, &dbp->bpwp,
-					bp ? &bp->set : NULL);
+					bp ? &bp->is_set : NULL);
 			if (retval != ERROR_OK)
 				goto done;
 		}
@@ -481,7 +485,7 @@ int arm_dpm_write_dirty_registers(struct arm_dpm *dpm, bool bpwp)
 		struct watchpoint *wp = dwp->wp;
 
 		retval = dpm_maybe_update_bpwp(dpm, bpwp, &dwp->bpwp,
-				wp ? &wp->set : NULL);
+				wp ? &wp->is_set : NULL);
 		if (retval != ERROR_OK)
 			goto done;
 	}
@@ -510,7 +514,7 @@ int arm_dpm_write_dirty_registers(struct arm_dpm *dpm, bool bpwp)
 				continue;
 			if (arm->cpsr == cache->reg_list + i)
 				continue;
-			if (!cache->reg_list[i].dirty)
+			if (!cache->reg_list[i].exist || !cache->reg_list[i].dirty)
 				continue;
 
 			r = cache->reg_list[i].arch_info;
@@ -759,7 +763,7 @@ static int arm_dpm_full_context(struct target *target)
 		for (unsigned i = 0; i < cache->num_regs; i++) {
 			struct arm_reg *r;
 
-			if (cache->reg_list[i].valid)
+			if (!cache->reg_list[i].exist || cache->reg_list[i].valid)
 				continue;
 			r = cache->reg_list[i].arch_info;
 
@@ -1006,7 +1010,7 @@ void arm_dpm_report_wfar(struct arm_dpm *dpm, uint32_t addr)
 			/* ?? */
 			break;
 	}
-	dpm->wp_pc = addr;
+	dpm->wp_addr = addr;
 }
 
 /*----------------------------------------------------------------------*/
@@ -1066,7 +1070,7 @@ int arm_dpm_setup(struct arm_dpm *dpm)
 	arm->read_core_reg = arm_dpm_read_core_reg;
 	arm->write_core_reg = arm_dpm_write_core_reg;
 
-	if (arm->core_cache == NULL) {
+	if (!arm->core_cache) {
 		cache = arm_build_reg_cache(target, arm);
 		if (!cache)
 			return ERROR_FAIL;
@@ -1084,18 +1088,21 @@ int arm_dpm_setup(struct arm_dpm *dpm)
 		target->type->remove_breakpoint = dpm_remove_breakpoint;
 	}
 
-	/* watchpoint setup */
-	target->type->add_watchpoint = dpm_add_watchpoint;
-	target->type->remove_watchpoint = dpm_remove_watchpoint;
+	/* watchpoint setup -- optional until it works everywhere */
+	if (!target->type->add_watchpoint) {
+		target->type->add_watchpoint = dpm_add_watchpoint;
+		target->type->remove_watchpoint = dpm_remove_watchpoint;
+	}
 
 	/* FIXME add vector catch support */
 
 	dpm->nbp = 1 + ((dpm->didr >> 24) & 0xf);
 	dpm->nwp = 1 + ((dpm->didr >> 28) & 0xf);
-	dpm->dbp = calloc(dpm->nbp, sizeof *dpm->dbp);
-	dpm->dwp = calloc(dpm->nwp, sizeof *dpm->dwp);
+	dpm->dbp = calloc(dpm->nbp, sizeof(*dpm->dbp));
+	dpm->dwp = calloc(dpm->nwp, sizeof(*dpm->dwp));
 
 	if (!dpm->dbp || !dpm->dwp) {
+		arm_free_reg_cache(arm);
 		free(dpm->dbp);
 		free(dpm->dwp);
 		return ERROR_FAIL;

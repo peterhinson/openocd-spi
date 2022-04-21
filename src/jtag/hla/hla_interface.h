@@ -29,25 +29,25 @@ enum e_hl_transports;
 /** */
 extern const char *hl_transports[];
 
-#define HLA_MAX_USB_IDS 8
+#define HLA_MAX_USB_IDS 16
 
 struct hl_interface_param_s {
 	/** */
 	const char *device_desc;
-	/** */
-	const char *serial;
 	/** List of recognised VIDs */
 	uint16_t vid[HLA_MAX_USB_IDS + 1];
 	/** List of recognised PIDs */
 	uint16_t pid[HLA_MAX_USB_IDS + 1];
-	/** */
-	unsigned api;
 	/** */
 	enum hl_transports transport;
 	/** */
 	bool connect_under_reset;
 	/** Initial interface clock clock speed */
 	int initial_interface_speed;
+	/** */
+	bool use_stlink_tcp;
+	/** */
+	uint16_t stlink_tcp_port;
 };
 
 struct hl_interface_s {
@@ -66,14 +66,5 @@ int hl_interface_open(enum hl_transports tr);
 int hl_interface_init_target(struct target *t);
 int hl_interface_init_reset(void);
 int hl_interface_override_target(const char **targetname);
-
-#if BUILD_HLADAPTER == 1
-int hl_interface_reset(int srst);
-#else
-static inline int hl_interface_reset(int srst)
-{
-	return ERROR_OK;
-}
-#endif
 
 #endif /* OPENOCD_JTAG_HLA_HLA_INTERFACE_H */

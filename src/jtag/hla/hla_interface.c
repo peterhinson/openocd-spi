@@ -35,7 +35,20 @@
 
 #include <target/target.h>
 
-static struct hl_interface_s hl_if = { {0, 0, { 0 }, { 0 }, 0, HL_TRANSPORT_UNKNOWN, false, -1}, 0, 0 };
+static struct hl_interface_s hl_if = {
+	.param = {
+		.device_desc = NULL,
+		.vid = { 0 },
+		.pid = { 0 },
+		.transport = HL_TRANSPORT_UNKNOWN,
+		.connect_under_reset = false,
+		.initial_interface_speed = -1,
+		.use_stlink_tcp = false,
+		.stlink_tcp_port = 7184,
+	},
+	.layout = NULL,
+	.handle = NULL,
+};
 
 int hl_interface_open(enum hl_transports tr)
 {
@@ -122,50 +135,31 @@ static int hl_interface_quit(void)
 	jtag_command_queue_reset();
 
 	free((void *)hl_if.param.device_desc);
-	free((void *)hl_if.param.serial);
 
 	return ERROR_OK;
 }
 
-static int hl_interface_execute_queue(void)
+static int hl_interface_reset(int req_trst, int req_srst)
 {
-	LOG_DEBUG("hl_interface_execute_queue: ignored");
-
-	return ERROR_OK;
+	return hl_if.layout->api->assert_srst(hl_if.handle, req_srst ? 0 : 1);
 }
 
 int hl_interface_init_reset(void)
 {
-	/* incase the adapter has not already handled asserting srst
+	/* in case the adapter has not already handled asserting srst
 	 * we will attempt it again */
 	if (hl_if.param.connect_under_reset) {
-		jtag_add_reset(0, 1);
-		hl_if.layout->api->assert_srst(hl_if.handle, 0);
+		adapter_assert_reset();
 	} else {
-		jtag_add_reset(0, 0);
+		adapter_deassert_reset();
 	}
 
 	return ERROR_OK;
 }
 
-/* FIXME: hla abuses of jtag_add_reset() to track srst status and for timings */
-int hl_interface_reset(int srst)
-{
-	int result;
-
-	if (srst == 1) {
-		jtag_add_reset(0, 1);
-		result = hl_if.layout->api->assert_srst(hl_if.handle, 0);
-	} else {
-		result = hl_if.layout->api->assert_srst(hl_if.handle, 1);
-		jtag_add_reset(0, 0);
-	}
-	return result;
-}
-
 static int hl_interface_khz(int khz, int *jtag_speed)
 {
-	if (hl_if.layout->api->speed == NULL)
+	if (!hl_if.layout->api->speed)
 		return ERROR_OK;
 
 	*jtag_speed = hl_if.layout->api->speed(hl_if.handle, khz, true);
@@ -180,10 +174,10 @@ static int hl_interface_speed_div(int speed, int *khz)
 
 static int hl_interface_speed(int speed)
 {
-	if (hl_if.layout->api->speed == NULL)
+	if (!hl_if.layout->api->speed)
 		return ERROR_OK;
 
-	if (hl_if.handle == NULL) {
+	if (!hl_if.handle) {
 		/* pass speed as initial param as interface not open yet */
 		hl_if.param.initial_interface_speed = speed;
 		return ERROR_OK;
@@ -206,7 +200,7 @@ int hl_interface_override_target(const char **targetname)
 	return ERROR_FAIL;
 }
 
-int hl_interface_config_trace(bool enabled, enum tpiu_pin_protocol pin_protocol,
+static int hl_interface_config_trace(bool enabled, enum tpiu_pin_protocol pin_protocol,
 		uint32_t port_size, unsigned int *trace_freq,
 		unsigned int traceclkin_freq, uint16_t *prescaler)
 {
@@ -221,7 +215,7 @@ int hl_interface_config_trace(bool enabled, enum tpiu_pin_protocol pin_protocol,
 	return ERROR_OK;
 }
 
-int hl_interface_poll_trace(uint8_t *buf, size_t *size)
+static int hl_interface_poll_trace(uint8_t *buf, size_t *size)
 {
 	if (hl_if.layout->api->poll_trace)
 		return hl_if.layout->api->poll_trace(hl_if.handle, buf, size);
@@ -237,19 +231,6 @@ COMMAND_HANDLER(hl_interface_handle_device_desc_command)
 		hl_if.param.device_desc = strdup(CMD_ARGV[0]);
 	} else {
 		LOG_ERROR("expected exactly one argument to hl_device_desc <description>");
-	}
-
-	return ERROR_OK;
-}
-
-COMMAND_HANDLER(hl_interface_handle_serial_command)
-{
-	LOG_DEBUG("hl_interface_handle_serial_command");
-
-	if (CMD_ARGC == 1) {
-		hl_if.param.serial = strdup(CMD_ARGV[0]);
-	} else {
-		LOG_ERROR("expected exactly one argument to hl_serial <serial-number>");
 	}
 
 	return ERROR_OK;
@@ -310,6 +291,31 @@ COMMAND_HANDLER(hl_interface_handle_vid_pid_command)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(hl_interface_handle_stlink_backend_command)
+{
+	/* default values */
+	bool use_stlink_tcp = false;
+	uint16_t stlink_tcp_port = 7184;
+
+	if (CMD_ARGC == 0 || CMD_ARGC > 2)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	else if (strcmp(CMD_ARGV[0], "usb") == 0) {
+		if (CMD_ARGC > 1)
+			return ERROR_COMMAND_SYNTAX_ERROR;
+		/* else use_stlink_tcp = false (already the case ) */
+	} else if (strcmp(CMD_ARGV[0], "tcp") == 0) {
+		use_stlink_tcp = true;
+		if (CMD_ARGC == 2)
+			COMMAND_PARSE_NUMBER(u16, CMD_ARGV[1], stlink_tcp_port);
+	} else
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	hl_if.param.use_stlink_tcp = use_stlink_tcp;
+	hl_if.param.stlink_tcp_port = stlink_tcp_port;
+
+	return ERROR_OK;
+}
+
 COMMAND_HANDLER(interface_handle_hla_command)
 {
 	if (CMD_ARGC != 1)
@@ -330,15 +336,8 @@ static const struct command_registration hl_interface_command_handlers[] = {
 	 .name = "hla_device_desc",
 	 .handler = &hl_interface_handle_device_desc_command,
 	 .mode = COMMAND_CONFIG,
-	 .help = "set the a device description of the adapter",
+	 .help = "set the device description of the adapter",
 	 .usage = "description_string",
-	 },
-	{
-	 .name = "hla_serial",
-	 .handler = &hl_interface_handle_serial_command,
-	 .mode = COMMAND_CONFIG,
-	 .help = "set the serial number of the adapter",
-	 .usage = "serial_string",
 	 },
 	{
 	 .name = "hla_layout",
@@ -352,29 +351,38 @@ static const struct command_registration hl_interface_command_handlers[] = {
 	 .handler = &hl_interface_handle_vid_pid_command,
 	 .mode = COMMAND_CONFIG,
 	 .help = "the vendor and product ID of the adapter",
-	 .usage = "(vid pid)* ",
+	 .usage = "(vid pid)*",
 	 },
+	{
+	 .name = "hla_stlink_backend",
+	 .handler = &hl_interface_handle_stlink_backend_command,
+	 .mode = COMMAND_CONFIG,
+	 .help = "select which ST-Link backend to use",
+	 .usage = "usb | tcp [port]",
+	},
 	 {
 	 .name = "hla_command",
 	 .handler = &interface_handle_hla_command,
 	 .mode = COMMAND_EXEC,
 	 .help = "execute a custom adapter-specific command",
-	 .usage = "hla_command <command>",
+	 .usage = "<command>",
 	 },
 	COMMAND_REGISTRATION_DONE
 };
 
-struct jtag_interface hl_interface = {
+struct adapter_driver hl_adapter_driver = {
 	.name = "hla",
-	.supported = 0,
-	.commands = hl_interface_command_handlers,
 	.transports = hl_transports,
+	.commands = hl_interface_command_handlers,
+
 	.init = hl_interface_init,
 	.quit = hl_interface_quit,
-	.execute_queue = hl_interface_execute_queue,
+	.reset = hl_interface_reset,
 	.speed = &hl_interface_speed,
 	.khz = &hl_interface_khz,
 	.speed_div = &hl_interface_speed_div,
 	.config_trace = &hl_interface_config_trace,
 	.poll_trace = &hl_interface_poll_trace,
+
+	/* no ops for HLA, targets hla_target and stm8 intercept them all */
 };

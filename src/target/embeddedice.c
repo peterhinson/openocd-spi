@@ -304,6 +304,22 @@ struct reg_cache *embeddedice_build_reg_cache(struct target *target,
 }
 
 /**
+ * Free all memory allocated for EmbeddedICE register cache
+ */
+void embeddedice_free_reg_cache(struct reg_cache *reg_cache)
+{
+	if (!reg_cache)
+		return;
+
+	for (unsigned int i = 0; i < reg_cache->num_regs; i++)
+		free(reg_cache->reg_list[i].value);
+
+	free(reg_cache->reg_list[0].arch_info);
+	free(reg_cache->reg_list);
+	free(reg_cache);
+}
+
+/**
  * Initialize EmbeddedICE module, if needed.
  */
 int embeddedice_setup(struct target *target)
@@ -629,7 +645,6 @@ int embeddedice_handshake(struct arm_jtag *jtag_info, int hsbit, uint32_t timeou
 	return ERROR_TARGET_TIMEOUT;
 }
 
-#ifndef HAVE_JTAG_MINIDRIVER_H
 /**
  * This is an inner loop of the open loop DCC write of data to target
  */
@@ -644,6 +659,3 @@ void embeddedice_write_dcc(struct jtag_tap *tap,
 		buffer += 4;
 	}
 }
-#else
-/* provided by minidriver */
-#endif

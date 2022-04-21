@@ -87,7 +87,7 @@ struct em357_options {
 struct em357_flash_bank {
 	struct em357_options option_bytes;
 	int ppage_size;
-	int probed;
+	bool probed;
 };
 
 static int em357_mass_erase(struct flash_bank *bank);
@@ -104,7 +104,7 @@ FLASH_BANK_COMMAND_HANDLER(em357_flash_bank_command)
 	em357_info = malloc(sizeof(struct em357_flash_bank));
 	bank->driver_priv = em357_info;
 
-	em357_info->probed = 0;
+	em357_info->probed = false;
 
 	return ERROR_OK;
 }
@@ -343,10 +343,10 @@ static int em357_protect_check(struct flash_bank *bank)
 	return ERROR_OK;
 }
 
-static int em357_erase(struct flash_bank *bank, int first, int last)
+static int em357_erase(struct flash_bank *bank, unsigned int first,
+		unsigned int last)
 {
 	struct target *target = bank->target;
-	int i;
 
 	if (bank->target->state != TARGET_HALTED) {
 		LOG_ERROR("Target not halted");
@@ -367,7 +367,7 @@ static int em357_erase(struct flash_bank *bank, int first, int last)
 	if (retval != ERROR_OK)
 		return retval;
 
-	for (i = first; i <= last; i++) {
+	for (unsigned int i = first; i <= last; i++) {
 		retval = target_write_u32(target, EM357_FLASH_CR, FLASH_PER);
 		if (retval != ERROR_OK)
 			return retval;
@@ -382,8 +382,6 @@ static int em357_erase(struct flash_bank *bank, int first, int last)
 		retval = em357_wait_status_busy(bank, 100);
 		if (retval != ERROR_OK)
 			return retval;
-
-		bank->sectors[i].is_erased = 1;
 	}
 
 	retval = target_write_u32(target, EM357_FLASH_CR, FLASH_LOCK);
@@ -393,12 +391,13 @@ static int em357_erase(struct flash_bank *bank, int first, int last)
 	return ERROR_OK;
 }
 
-static int em357_protect(struct flash_bank *bank, int set, int first, int last)
+static int em357_protect(struct flash_bank *bank, int set, unsigned int first,
+		unsigned int last)
 {
 	struct em357_flash_bank *em357_info = NULL;
 	struct target *target = bank->target;
 	uint16_t prot_reg[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
-	int i, reg, bit;
+	int reg, bit;
 	int status;
 	uint32_t protection;
 
@@ -431,7 +430,7 @@ static int em357_protect(struct flash_bank *bank, int set, int first, int last)
 	prot_reg[1] = (uint16_t)(protection >> 8);
 	prot_reg[2] = (uint16_t)(protection >> 16);
 
-	for (i = first; i <= last; i++) {
+	for (unsigned int i = first; i <= last; i++) {
 		reg = (i / em357_info->ppage_size) / 8;
 		bit = (i / em357_info->ppage_size) - (reg * 8);
 
@@ -465,7 +464,7 @@ static int em357_write_block(struct flash_bank *bank, const uint8_t *buffer,
 	struct armv7m_algorithm armv7m_info;
 	int retval = ERROR_OK;
 
-	/* see contib/loaders/flash/stm32x.s for src, the same is used here except for
+	/* see contrib/loaders/flash/stm32x.s for src, the same is used here except for
 	 * a modified *_FLASH_BASE */
 
 	static const uint8_t em357_flash_write_code[] = {
@@ -679,7 +678,7 @@ static int em357_probe(struct flash_bank *bank)
 	int page_size;
 	uint32_t base_address = 0x08000000;
 
-	em357_info->probed = 0;
+	em357_info->probed = false;
 
 	switch (bank->size) {
 		case 0x10000:
@@ -723,10 +722,7 @@ static int em357_probe(struct flash_bank *bank)
 
 	LOG_INFO("flash size = %dkbytes", num_pages*page_size/1024);
 
-	if (bank->sectors) {
-		free(bank->sectors);
-		bank->sectors = NULL;
-	}
+	free(bank->sectors);
 
 	bank->base = base_address;
 	bank->size = (num_pages * page_size);
@@ -740,7 +736,7 @@ static int em357_probe(struct flash_bank *bank)
 		bank->sectors[i].is_protected = 1;
 	}
 
-	em357_info->probed = 1;
+	em357_info->probed = true;
 
 	return ERROR_OK;
 }
@@ -763,7 +759,7 @@ COMMAND_HANDLER(em357_handle_lock_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	em357_info = bank->driver_priv;
@@ -802,7 +798,7 @@ COMMAND_HANDLER(em357_handle_unlock_command)
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	target = bank->target;
@@ -870,24 +866,18 @@ static int em357_mass_erase(struct flash_bank *bank)
 
 COMMAND_HANDLER(em357_handle_mass_erase_command)
 {
-	int i;
-
 	if (CMD_ARGC < 1)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
-	if (ERROR_OK != retval)
+	if (retval != ERROR_OK)
 		return retval;
 
 	retval = em357_mass_erase(bank);
-	if (retval == ERROR_OK) {
-		/* set all sectors as erased */
-		for (i = 0; i < bank->num_sectors; i++)
-			bank->sectors[i].is_erased = 1;
-
+	if (retval == ERROR_OK)
 		command_print(CMD, "em357 mass erase complete");
-	} else
+	else
 		command_print(CMD, "em357 mass erase failed");
 
 	return retval;

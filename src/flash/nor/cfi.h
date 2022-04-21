@@ -23,13 +23,13 @@
 #define CFI_STATUS_POLL_MASK_DQ6_DQ7     0xC0 /* DQ6..DQ7 */
 
 struct cfi_flash_bank {
-	int x16_as_x8;
-	int jedec_probe;
-	int not_cfi;
-	int probed;
+	bool x16_as_x8;
+	bool jedec_probe;
+	bool not_cfi;
+	bool probed;
 
 	enum target_endianness endianness;
-	int data_swap;
+	bool data_swap;
 
 	uint16_t manufacturer;
 	uint16_t device_id;
@@ -73,6 +73,12 @@ struct cfi_flash_bank {
 	unsigned buf_write_timeout;
 	unsigned block_erase_timeout;
 	unsigned chip_erase_timeout;
+
+	/* memory accessors */
+	int (*write_mem)(struct flash_bank *bank, target_addr_t addr,
+			 uint32_t count, const uint8_t *buffer);
+	int (*read_mem)(struct flash_bank *bank, target_addr_t addr,
+			uint32_t count, uint8_t *buffer);
 };
 
 /* Intel primary extended query table
@@ -102,17 +108,17 @@ struct cfi_spansion_pri_ext {
 	uint8_t  pri[3];
 	uint8_t  major_version;
 	uint8_t  minor_version;
-	uint8_t  SiliconRevision; /* bits 1-0: Address Sensitive Unlock */
-	uint8_t  EraseSuspend;
-	uint8_t  BlkProt;
-	uint8_t  TmpBlkUnprotect;
-	uint8_t  BlkProtUnprot;
-	uint8_t  SimultaneousOps;
-	uint8_t  BurstMode;
-	uint8_t  PageMode;
-	uint8_t  VppMin;
-	uint8_t  VppMax;
-	uint8_t  TopBottom;
+	uint8_t  silicon_revision; /* bits 1-0: Address Sensitive Unlock */
+	uint8_t  erase_suspend;
+	uint8_t  blk_prot;
+	uint8_t  tmp_blk_unprotected;
+	uint8_t  blk_prot_unprot;
+	uint8_t  simultaneous_ops;
+	uint8_t  burst_mode;
+	uint8_t  page_mode;
+	uint8_t  vpp_min;
+	uint8_t  vpp_max;
+	uint8_t  top_bottom;
 	int _reversed_geometry;
 	uint32_t _unlock1;
 	uint32_t _unlock2;
@@ -148,6 +154,25 @@ struct cfi_fixup {
 	const void *param;
 };
 
+int cfi_erase(struct flash_bank *bank, unsigned int first, unsigned int last);
+int cfi_protect(struct flash_bank *bank, int set, unsigned int first,
+		unsigned int last);
+int cfi_probe(struct flash_bank *bank);
+int cfi_auto_probe(struct flash_bank *bank);
+int cfi_protect_check(struct flash_bank *bank);
+int cfi_get_info(struct flash_bank *bank, struct command_invocation *cmd);
+int cfi_flash_bank_cmd(struct flash_bank *bank, unsigned int argc, const char **argv);
+
+uint32_t cfi_flash_address(struct flash_bank *bank, int sector, uint32_t offset);
+int cfi_spansion_unlock_seq(struct flash_bank *bank);
+int cfi_send_command(struct flash_bank *bank, uint8_t cmd, uint32_t address);
+int cfi_write_word(struct flash_bank *bank, uint8_t *word, uint32_t address);
+int cfi_spansion_wait_status_busy(struct flash_bank *bank, int timeout);
+int cfi_reset(struct flash_bank *bank);
+
+int cfi_target_read_memory(struct flash_bank *bank, target_addr_t addr,
+			   uint32_t count, uint8_t *buffer);
+
 #define CFI_MFR_AMD		0x0001
 #define CFI_MFR_FUJITSU	0x0004
 #define CFI_MFR_ATMEL	0x001F
@@ -159,5 +184,8 @@ struct cfi_fixup {
 
 #define CFI_MFR_ANY		0xffff
 #define CFI_ID_ANY		0xffff
+
+#define CFI_MAX_BUS_WIDTH       4
+#define CFI_MAX_CHIP_WIDTH      4
 
 #endif /* OPENOCD_FLASH_NOR_CFI_H */

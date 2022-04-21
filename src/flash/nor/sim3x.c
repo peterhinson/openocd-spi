@@ -27,6 +27,7 @@
 #include <helper/binarybuffer.h>
 #include <helper/time_support.h>
 #include <target/algorithm.h>
+#include <target/arm_adi_v5.h>
 #include <target/cortex_m.h>
 
 /* SI32_DEVICEID0 */
@@ -250,7 +251,7 @@ static int sim3x_erase_page(struct flash_bank *bank, uint32_t addr)
 			if (ret != ERROR_OK)
 				return ret;
 
-			/* Write the inital unlock value to KEY */
+			/* Write the initial unlock value to KEY */
 			ret = target_write_u32(target, FLASHCTRL0_KEY,
 			FLASHCTRL0_KEY_INITIAL_UNLOCK);
 			if (ret != ERROR_OK)
@@ -277,9 +278,10 @@ static int sim3x_erase_page(struct flash_bank *bank, uint32_t addr)
 	return ERROR_FAIL;
 }
 
-static int sim3x_flash_erase(struct flash_bank *bank, int first, int last)
+static int sim3x_flash_erase(struct flash_bank *bank, unsigned int first,
+		unsigned int last)
 {
-	int ret, i;
+	int ret;
 	uint32_t temp;
 	struct sim3x_info *sim3x_info;
 	struct target *target;
@@ -302,7 +304,7 @@ static int sim3x_flash_erase(struct flash_bank *bank, int first, int last)
 	}
 
 	/* erase pages */
-	for (i = first; i <= last; i++) {
+	for (unsigned int i = first; i <= last; i++) {
 		ret = sim3x_erase_page(bank, bank->sectors[i].offset);
 		if (ret != ERROR_OK)
 			return ret;
@@ -311,7 +313,7 @@ static int sim3x_flash_erase(struct flash_bank *bank, int first, int last)
 	target = bank->target;
 
 	/* Wait until busy */
-	for (i = 0; i < FLASH_BUSY_TIMEOUT; i++) {
+	for (unsigned int i = 0; i < FLASH_BUSY_TIMEOUT; i++) {
 		ret = target_read_u32(target, FLASHCTRL0_CONFIG_ALL, &temp);
 		if (ret != ERROR_OK)
 			return ret;
@@ -471,7 +473,7 @@ static int sim3x_write_block(struct flash_bank *bank, const uint8_t *buf,
 	return ret;
 }
 
-static int sim3x_flash_write(struct flash_bank *bank, const uint8_t * buffer, uint32_t offset, uint32_t count)
+static int sim3x_flash_write(struct flash_bank *bank, const uint8_t *buffer, uint32_t offset, uint32_t count)
 {
 	int ret;
 	struct target *target;
@@ -489,7 +491,7 @@ static int sim3x_flash_write(struct flash_bank *bank, const uint8_t * buffer, ui
 	sim3x_info = bank->driver_priv;
 
 	if (sim3x_info->flash_locked) {
-		LOG_ERROR("Falsh is locked");
+		LOG_ERROR("Flash is locked");
 		return ERROR_FAIL;
 	}
 
@@ -510,7 +512,7 @@ static int sim3x_flash_write(struct flash_bank *bank, const uint8_t * buffer, ui
 		count++;
 		new_buffer = malloc(count);
 
-		if (new_buffer == NULL) {
+		if (!new_buffer) {
 			LOG_ERROR("odd number of bytes to write and no memory "
 					"for padding buffer");
 			return ERROR_FAIL;
@@ -547,7 +549,7 @@ static int sim3x_flash_lock_check(struct flash_bank *bank)
 
 static int sim3x_flash_protect_check(struct flash_bank *bank)
 {
-	int ret, i;
+	int ret;
 	struct sim3x_info *sim3x_info;
 
 	/* Check if target is halted */
@@ -562,13 +564,14 @@ static int sim3x_flash_protect_check(struct flash_bank *bank)
 
 	sim3x_info = bank->driver_priv;
 
-	for (i = 0; i < bank->num_sectors; i++)
+	for (unsigned int i = 0; i < bank->num_sectors; i++)
 		bank->sectors[i].is_protected = sim3x_info->flash_locked;
 
 	return ERROR_OK;
 }
 
-static int sim3x_flash_protect(struct flash_bank *bank, int set, int first, int last)
+static int sim3x_flash_protect(struct flash_bank *bank, int set,
+		unsigned int first, unsigned int last)
 {
 	int ret;
 	uint8_t lock_word[4];
@@ -799,10 +802,7 @@ static int sim3x_probe(struct flash_bank *bank)
 	if (ret != ERROR_OK)
 		return ret;
 
-	if (bank->sectors) {
-		free(bank->sectors);
-		bank->sectors = NULL;
-	}
+	free(bank->sectors);
 
 	bank->base = FLASH_BASE_ADDRESS;
 	bank->size = sim3x_info->flash_size_kb * SIM3X_FLASH_PAGE_SIZE;
@@ -835,53 +835,32 @@ static int sim3x_auto_probe(struct flash_bank *bank)
 	}
 }
 
-static int sim3x_flash_info(struct flash_bank *bank, char *buf, int buf_size)
+static int sim3x_flash_info(struct flash_bank *bank, struct command_invocation *cmd)
 {
-	int ret;
-	int printed = 0;
 	struct sim3x_info *sim3x_info;
 
 	sim3x_info = bank->driver_priv;
 
 	/* Read info about chip */
-	ret = sim3x_read_info(bank);
+	int ret = sim3x_read_info(bank);
 	if (ret != ERROR_OK)
 		return ret;
 
 	/* Part */
 	if (sim3x_info->part_family && sim3x_info->part_number) {
-		printed = snprintf(buf, buf_size, "SiM3%c%d", sim3x_info->part_family, sim3x_info->part_number);
-		buf += printed;
-		buf_size -= printed;
-
-		if (buf_size <= 0)
-			return ERROR_BUF_TOO_SMALL;
+		command_print_sameline(cmd, "SiM3%c%d", sim3x_info->part_family, sim3x_info->part_number);
 
 		/* Revision */
 		if (sim3x_info->device_revision && sim3x_info->device_revision <= 'Z' - 'A') {
-			printed = snprintf(buf, buf_size, "-%c", sim3x_info->device_revision + 'A');
-			buf += printed;
-			buf_size -= printed;
-
-			if (buf_size <= 0)
-				return ERROR_BUF_TOO_SMALL;
+			command_print_sameline(cmd, "-%c", sim3x_info->device_revision + 'A');
 
 			/* Package */
-			printed = snprintf(buf, buf_size, "-G%s", sim3x_info->device_package);
-			buf += printed;
-			buf_size -= printed;
-
-			if (buf_size <= 0)
-				return ERROR_BUF_TOO_SMALL;
+			command_print_sameline(cmd, "-G%s", sim3x_info->device_package);
 		}
 	}
 
 	/* Print flash size */
-	printed = snprintf(buf, buf_size, " flash_size = %dKB", sim3x_info->flash_size_kb);
-	buf_size -= printed;
-
-	if (buf_size <= 0)
-		return ERROR_BUF_TOO_SMALL;
+	command_print_sameline(cmd, " flash_size = %dKB", sim3x_info->flash_size_kb);
 
 	return ERROR_OK;
 }
@@ -957,7 +936,7 @@ COMMAND_HANDLER(sim3x_mass_erase)
 	struct cortex_m_common *cortex_m = target_to_cm(target);
 	struct adiv5_dap *dap = cortex_m->armv7m.arm.dap;
 
-	if (dap == NULL) {
+	if (!dap) {
 		/* Used debug interface doesn't support direct DAP access */
 		LOG_ERROR("mass_erase can't be used by this debug interface");
 		return ERROR_FAIL;
@@ -1002,9 +981,9 @@ COMMAND_HANDLER(sim3x_lock)
 	struct cortex_m_common *cortex_m = target_to_cm(target);
 	struct adiv5_dap *dap = cortex_m->armv7m.arm.dap;
 
-	if (dap == NULL) {
+	if (!dap) {
 		/* Used debug interface doesn't support direct DAP access */
-		LOG_INFO("Target can't by unlocked by this debug interface");
+		LOG_INFO("Target can't be unlocked by this debug interface");
 
 		/* Core check */
 		ret = target_read_u32(target, CPUID, &val);
@@ -1030,7 +1009,7 @@ COMMAND_HANDLER(sim3x_lock)
 		ret = target_read_u32(target, CPUID, &val);
 		/* if correct value is read, then it will continue */
 		if (ret != ERROR_OK || (val & CPUID_CHECK_VALUE_MASK) != CPUID_CHECK_VALUE) {
-			/* if correct value is'n read, then it will check SIM3X_AP_INIT_STAT register */
+			/* if correct value isn't read, then it will check SIM3X_AP_INIT_STAT register */
 			ret = ap_read_register(dap, SIM3X_AP_INIT_STAT, &val);
 			if (ret != ERROR_OK)
 				return ret;
@@ -1061,7 +1040,7 @@ COMMAND_HANDLER(sim3x_lock)
 			return retval;
 
 		ret = sim3x_flash_write(bank, lock_word, LOCK_WORD_ADDRESS, 4);
-		if (ERROR_OK != ret)
+		if (ret != ERROR_OK)
 			return ret;
 
 		LOG_INFO("Target is successfully locked");
@@ -1074,7 +1053,7 @@ COMMAND_HANDLER(sim3x_lock)
 		LOG_ERROR("Unexpected lock word value");
 
 		/* SIM3X_AP_ID_VALUE is not checked */
-		if (dap == NULL)
+		if (!dap)
 			LOG_INFO("Maybe this isn't a SiM3x MCU");
 
 		return ERROR_FAIL;

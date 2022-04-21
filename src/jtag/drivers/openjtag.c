@@ -1,6 +1,6 @@
 /*******************************************************************************
  *   Driver for OpenJTAG Project (www.openjtag.org)                            *
- *   Compatible with libftdi and ftd2xx drivers.                               *
+ *   Compatible with libftdi drivers.                                          *
  *                                                                             *
  *   Cypress CY7C65215 support                                                 *
  *   Copyright (C) 2015 Vianney le Clément de Saint-Marcq, Essensium NV        *
@@ -45,7 +45,7 @@
 
 #include <jtag/interface.h>
 #include <jtag/commands.h>
-#include "libusb_common.h"
+#include "libusb_helper.h"
 
 static enum {
 	OPENJTAG_VARIANT_STANDARD,
@@ -82,7 +82,7 @@ typedef enum openjtag_tap_state {
 } openjtag_tap_state_t;
 
 /* OPENJTAG access library includes */
-#include <ftdi.h>
+#include "libftdi_helper.h"
 
 /* OpenJTAG vid/pid */
 static uint16_t openjtag_vid = 0x0403;
@@ -111,7 +111,7 @@ static uint8_t usb_rx_buf[OPENJTAG_BUFFER_SIZE];
 static struct openjtag_scan_result openjtag_scan_result_buffer[OPENJTAG_MAX_PENDING_RESULTS];
 static int openjtag_scan_result_count;
 
-static jtag_libusb_device_handle *usbh;
+static struct libusb_device_handle *usbh;
 
 /* CY7C65215 model only */
 #define CY7C65215_JTAG_REQUEST  0x40  /* bmRequestType: vendor host-to-device */
@@ -229,7 +229,7 @@ static int openjtag_buf_write_standard(
 		return ERROR_JTAG_DEVICE_ERROR;
 	}
 
-	*bytes_written += retval;
+	*bytes_written = retval;
 
 	return ERROR_OK;
 }
@@ -256,10 +256,9 @@ static int openjtag_buf_write_cy7c65215(
 		return ERROR_JTAG_DEVICE_ERROR;
 	}
 
-	ret = jtag_libusb_bulk_write(usbh, ep_out, (char *)buf, size,
-								 CY7C65215_USB_TIMEOUT);
-	if (ret < 0) {
-		LOG_ERROR("bulk write failed, error %d", ret);
+	if (jtag_libusb_bulk_write(usbh, ep_out, (char *)buf, size,
+				   CY7C65215_USB_TIMEOUT, &ret)) {
+		LOG_ERROR("bulk write failed, error");
 		return ERROR_JTAG_DEVICE_ERROR;
 	}
 	*bytes_written = ret;
@@ -324,10 +323,9 @@ static int openjtag_buf_read_cy7c65215(
 		return ERROR_JTAG_DEVICE_ERROR;
 	}
 
-	ret = jtag_libusb_bulk_read(usbh, ep_in, (char *)buf, qty,
-								CY7C65215_USB_TIMEOUT);
-	if (ret < 0) {
-		LOG_ERROR("bulk read failed, error %d", ret);
+	if (jtag_libusb_bulk_read(usbh, ep_in, (char *)buf, qty,
+				  CY7C65215_USB_TIMEOUT, &ret)) {
+		LOG_ERROR("bulk read failed, error");
 		return ERROR_JTAG_DEVICE_ERROR;
 	}
 	*bytes_read = ret;
@@ -399,7 +397,7 @@ static int openjtag_init_standard(void)
 	uint8_t latency_timer;
 
 	/* Open by device description */
-	if (openjtag_device_desc == NULL) {
+	if (!openjtag_device_desc) {
 		LOG_WARNING("no openjtag device description specified, "
 				"using default 'Open JTAG Project'");
 		openjtag_device_desc = "Open JTAG Project";
@@ -438,8 +436,8 @@ static int openjtag_init_standard(void)
 		return ERROR_JTAG_DEVICE_ERROR;
 	}
 
-	if (ftdi_usb_purge_buffers(&ftdic) < 0) {
-		LOG_ERROR("ftdi_purge_buffers: %s", ftdic.error_str);
+	if (ftdi_tcioflush(&ftdic) < 0) {
+		LOG_ERROR("ftdi flush: %s", ftdic.error_str);
 		return ERROR_JTAG_INIT_FAILED;
 	}
 
@@ -451,7 +449,7 @@ static int openjtag_init_cy7c65215(void)
 	int ret;
 
 	usbh = NULL;
-	ret = jtag_libusb_open(cy7c65215_vids, cy7c65215_pids, NULL, &usbh);
+	ret = jtag_libusb_open(cy7c65215_vids, cy7c65215_pids, &usbh, NULL);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("unable to open cy7c65215 device");
 		goto err;
@@ -477,7 +475,7 @@ static int openjtag_init_cy7c65215(void)
 	return ERROR_OK;
 
 err:
-	if (usbh != NULL)
+	if (usbh)
 		jtag_libusb_close(usbh);
 	return ERROR_JTAG_INIT_FAILED;
 }
@@ -593,8 +591,7 @@ static int openjtag_execute_tap_queue(void)
 #endif
 			jtag_read_buffer(buffer, openjtag_scan_result_buffer[res_count].command);
 
-			if (openjtag_scan_result_buffer[res_count].buffer)
-				free(openjtag_scan_result_buffer[res_count].buffer);
+			free(openjtag_scan_result_buffer[res_count].buffer);
 
 			res_count++;
 		}
@@ -654,7 +651,6 @@ static void openjtag_add_scan(uint8_t *buffer, int length, struct scan_command *
 			/* whole byte */
 
 			/* bits to transfer */
-			bits = 7;
 			command |= (7 << 5);
 			length -= 8;
 		}
@@ -692,7 +688,7 @@ static void openjtag_execute_sleep(struct jtag_command *cmd)
 
 static void openjtag_set_state(uint8_t openocd_state)
 {
-	int8_t state = openjtag_get_tap_state(openocd_state);
+	uint8_t state = openjtag_get_tap_state(openocd_state);
 
 	uint8_t buf = 0;
 	buf = 0x01;
@@ -807,7 +803,7 @@ static int openjtag_execute_queue(void)
 {
 	struct jtag_command *cmd = jtag_command_queue;
 
-	while (cmd != NULL) {
+	while (cmd) {
 		openjtag_execute_command(cmd);
 		cmd = cmd->next;
 	}
@@ -874,16 +870,16 @@ COMMAND_HANDLER(openjtag_handle_variant_command)
 	return ERROR_OK;
 }
 
-static const struct command_registration openjtag_command_handlers[] = {
+static const struct command_registration openjtag_subcommand_handlers[] = {
 	{
-		.name = "openjtag_device_desc",
+		.name = "device_desc",
 		.handler = openjtag_handle_device_desc_command,
 		.mode = COMMAND_CONFIG,
 		.help = "set the USB device description of the OpenJTAG",
 		.usage = "description-string",
 	},
 	{
-		.name = "openjtag_variant",
+		.name = "variant",
 		.handler = openjtag_handle_variant_command,
 		.mode = COMMAND_CONFIG,
 		.help = "set the OpenJTAG variant",
@@ -892,17 +888,31 @@ static const struct command_registration openjtag_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
-struct jtag_interface openjtag_interface = {
+static const struct command_registration openjtag_command_handlers[] = {
+	{
+		.name = "openjtag",
+		.mode = COMMAND_ANY,
+		.help = "perform openjtag management",
+		.chain = openjtag_subcommand_handlers,
+		.usage = "",
+	},
+	COMMAND_REGISTRATION_DONE
+};
+
+static struct jtag_interface openjtag_interface = {
+	.execute_queue = openjtag_execute_queue,
+};
+
+struct adapter_driver openjtag_adapter_driver = {
 	.name = "openjtag",
 	.transports = jtag_only,
 	.commands = openjtag_command_handlers,
 
-	.execute_queue = openjtag_execute_queue,
-	.speed = openjtag_speed,
-	.speed_div = openjtag_speed_div,
-	.khz = openjtag_khz,
 	.init = openjtag_init,
 	.quit = openjtag_quit,
+	.speed = openjtag_speed,
+	.khz = openjtag_khz,
+	.speed_div = openjtag_speed_div,
+
+	.jtag_ops = &openjtag_interface,
 };
-
-

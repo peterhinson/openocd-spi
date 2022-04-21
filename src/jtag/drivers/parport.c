@@ -23,6 +23,7 @@
 #include "config.h"
 #endif
 
+#include <jtag/adapter.h>
 #include <jtag/interface.h>
 #include "bitbang.h"
 
@@ -237,7 +238,7 @@ static int parport_get_giveio_access(void)
 	HANDLE h;
 	OSVERSIONINFO version;
 
-	version.dwOSVersionInfoSize = sizeof version;
+	version.dwOSVersionInfoSize = sizeof(version);
 	if (!GetVersionEx(&version)) {
 		errno = EINVAL;
 		return -1;
@@ -260,7 +261,6 @@ static int parport_get_giveio_access(void)
 static struct bitbang_interface parport_bitbang = {
 		.read = &parport_read,
 		.write = &parport_write,
-		.reset = &parport_reset,
 		.blink = &parport_led,
 	};
 
@@ -273,7 +273,7 @@ static int parport_init(void)
 
 	cur_cable = cables;
 
-	if (parport_cable == NULL) {
+	if (!parport_cable) {
 		parport_cable = strdup("wiggler");
 		LOG_WARNING("No parport cable specified, using default 'wiggler'");
 	}
@@ -393,10 +393,8 @@ static int parport_quit(void)
 		parport_write_data();
 	}
 
-	if (parport_cable) {
-		free(parport_cable);
-		parport_cable = NULL;
-	}
+	free(parport_cable);
+	parport_cable = NULL;
 
 	return ERROR_OK;
 }
@@ -451,7 +449,7 @@ COMMAND_HANDLER(parport_handle_parport_toggling_time_command)
 		uint32_t ns;
 		int retval = parse_u32(CMD_ARGV[0], &ns);
 
-		if (ERROR_OK != retval)
+		if (retval != ERROR_OK)
 			return retval;
 
 		if (ns == 0) {
@@ -460,9 +458,9 @@ COMMAND_HANDLER(parport_handle_parport_toggling_time_command)
 		}
 
 		parport_toggling_time_ns = ns;
-		retval = jtag_get_speed(&wait_states);
+		retval = adapter_get_speed(&wait_states);
 		if (retval != ERROR_OK) {
-			/* if jtag_get_speed fails then the clock_mode
+			/* if adapter_get_speed fails then the clock_mode
 			 * has not been configured, this happens if parport_toggling_time is
 			 * called before the adapter speed is set */
 			LOG_INFO("no parport speed set - defaulting to zero wait states");
@@ -476,9 +474,9 @@ COMMAND_HANDLER(parport_handle_parport_toggling_time_command)
 	return ERROR_OK;
 }
 
-static const struct command_registration parport_command_handlers[] = {
+static const struct command_registration parport_subcommand_handlers[] = {
 	{
-		.name = "parport_port",
+		.name = "port",
 		.handler = parport_handle_parport_port_command,
 		.mode = COMMAND_CONFIG,
 		.help = "Display the address of the I/O port (e.g. 0x378) "
@@ -487,7 +485,7 @@ static const struct command_registration parport_command_handlers[] = {
 		.usage = "[port_number]",
 	},
 	{
-		.name = "parport_cable",
+		.name = "cable",
 		.handler = parport_handle_parport_cable_command,
 		.mode = COMMAND_CONFIG,
 		.help = "Set the layout of the parallel port cable "
@@ -496,7 +494,7 @@ static const struct command_registration parport_command_handlers[] = {
 		.usage = "[layout]",
 	},
 	{
-		.name = "parport_write_on_exit",
+		.name = "write_on_exit",
 		.handler = parport_handle_write_on_exit_command,
 		.mode = COMMAND_CONFIG,
 		.help = "Configure the parallel driver to write "
@@ -504,7 +502,7 @@ static const struct command_registration parport_command_handlers[] = {
 		.usage = "('on'|'off')",
 	},
 	{
-		.name = "parport_toggling_time",
+		.name = "toggling_time",
 		.handler = parport_handle_parport_toggling_time_command,
 		.mode = COMMAND_CONFIG,
 		.help = "Displays or assigns how many nanoseconds it "
@@ -514,16 +512,33 @@ static const struct command_registration parport_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
-struct jtag_interface parport_interface = {
-	.name = "parport",
+static const struct command_registration parport_command_handlers[] = {
+	{
+		.name = "parport",
+		.mode = COMMAND_ANY,
+		.help = "perform parport management",
+		.chain = parport_subcommand_handlers,
+		.usage = "",
+	},
+	COMMAND_REGISTRATION_DONE
+};
+
+static struct jtag_interface parport_interface = {
 	.supported = DEBUG_CAP_TMS_SEQ,
+	.execute_queue = bitbang_execute_queue,
+};
+
+struct adapter_driver parport_adapter_driver = {
+	.name = "parport",
 	.transports = jtag_only,
 	.commands = parport_command_handlers,
 
 	.init = parport_init,
 	.quit = parport_quit,
+	.reset = parport_reset,
+	.speed = parport_speed,
 	.khz = parport_khz,
 	.speed_div = parport_speed_div,
-	.speed = parport_speed,
-	.execute_queue = bitbang_execute_queue,
+
+	.jtag_ops = &parport_interface,
 };
