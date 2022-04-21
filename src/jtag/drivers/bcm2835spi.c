@@ -71,6 +71,7 @@ static bb_value_t bcm2835spi_read(void);
 static int bcm2835spi_write(int tck, int tms, int tdi);
 static int bcm2835spi_reset(int trst, int srst);
 static int bcm2835_swdio_read(void);
+static int bcm2835spi_swd_write(int swclk, int swdio);
 static void bcm2835_swdio_drive(bool is_output);
 static int bcm2835spi_speed(int speed);
 static int bcm2835spi_speed_div(int speed, int *khz);
@@ -138,31 +139,39 @@ static const struct command_registration bcm2835spi_command_handlers[] = {
 static struct bitbang_interface bcm2835spi_bitbang = {
 	.read        = bcm2835spi_read,
 	.write       = bcm2835spi_write,
-	.reset       = bcm2835spi_reset,
 	.swdio_read  = bcm2835_swdio_read,
 	.swdio_drive = bcm2835_swdio_drive,
+	.swd_write   = bcm2835spi_swd_write,
 	.blink       = NULL
 };
 
 /// JTAG interface
-struct jtag_interface bcm2835spi_interface = {
-	.name           = "bcm2835spi",
+static struct jtag_interface bcm2835spi_interface = {
 	.supported      = DEBUG_CAP_TMS_SEQ,
 	.execute_queue  = bitbang_execute_queue,
+};
+
+/// Adapter driver
+struct adapter_driver bcm2835spi_adapter_driver = {
+	.name           = "bcm2835spi",
 	.transports     = bcm2835_transports,
-	.swd            = &bitbang_swd,
+	.commands       = bcm2835spi_command_handlers,
+
+	.init           = bcm2835spi_init,
+	.quit           = bcm2835spi_quit,
 	.speed          = bcm2835spi_speed,
 	.khz            = bcm2835spi_khz,
 	.speed_div      = bcm2835spi_speed_div,
-	.commands       = bcm2835spi_command_handlers,
-	.init           = bcm2835spi_init,
-	.quit           = bcm2835spi_quit,
+  .reset          = bcm2835spi_reset,
+
+  .jtag_ops = &bcm2835spi_interface,
+  .swd_ops = &bitbang_swd,
 };
 
 /// Transmit or receive bit_cnt number of bits from/into buf (LSB format) starting at the bit offset.
 /// If target_to_host is false: Transmit from host to target.
 /// If target_to_host is true:  Receive from target to host.
-/// Called by bitbang_exchange() in src/jtag/drivers/bitbang.c
+/// Called by bitbang_swd_exchange() in src/jtag/drivers/bitbang.c
 void spi_exchange(bool target_to_host, uint8_t buf[], unsigned int offset, unsigned int bit_cnt)
 {
     if (bit_cnt == 0) { return; }
@@ -171,8 +180,8 @@ void spi_exchange(bool target_to_host, uint8_t buf[], unsigned int offset, unsig
 
     //  Handle delay operation.
     if (!buf) {
-        //  bitbang_swd_run_queue() calls bitbang_exchange() with buf=NULL and bit_cnt=8 for delay.
-        //  bitbang_swd_write_reg() calls bitbang_exchange() with buf=NULL and bit_cnt=255 for delay.
+        //  bitbang_swd_run_queue() calls bitbang_swd_exchange() with buf=NULL and bit_cnt=8 for delay.
+        //  bitbang_swd_write_reg() calls bitbang_swd_exchange() with buf=NULL and bit_cnt=255 for delay.
         //  We send the null bytes for delay.
 #ifdef LOG_SPI
         LOG_DEBUG("delay %d\n", bit_cnt);
@@ -466,7 +475,7 @@ static int bcm2835_swdio_read(void)
 }
 
 /// Write one SWD bit (not used)
-static int bcm2835spi_swd_write(int tck, int tms, int tdi)
+static int bcm2835spi_swd_write(int swclk, int swdio)
 {
 	return ERROR_OK;
 }
@@ -558,10 +567,6 @@ static int bcm2835spi_init(void)
 	ret = ioctl(spi_fd, SPI_IOC_RD_MAX_SPEED_HZ, &speed);
 	if (ret == -1) { perror("can't set max read speed"); }
 
-	if (swd_mode) {
-		bcm2835spi_bitbang.write = bcm2835spi_swd_write;
-		bitbang_switch_to_swd();
-	}
 	return ERROR_OK;
 }
 
