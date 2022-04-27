@@ -389,20 +389,10 @@ static int bitbang_swd_init(void)
 	return ERROR_OK;
 }
 
-//  #define LOG_BITBANG  //  Log bit bang requests
-
-#if BUILD_BCM2835SPI == 1
-void spi_exchange(bool rnw, uint8_t buf[], unsigned int offset, unsigned int bit_cnt);
-#endif  //  BUILD_BCM2835SPI == 1
-
 static void bitbang_swd_exchange(bool rnw, uint8_t buf[], unsigned int offset, unsigned int bit_cnt)
 {
 	LOG_DEBUG("bitbang_swd_exchange");
 
-	if (bitbang_interface->blink) {
-		/* FIXME: we should manage errors */
-		bitbang_interface->blink(1);
-	}
 #ifdef LOG_BITBANG
 	{
 		if (!rnw && buf) {  //  If transmitting SWD command to target...
@@ -422,27 +412,27 @@ static void bitbang_swd_exchange(bool rnw, uint8_t buf[], unsigned int offset, u
 		bitbang_interface->blink(1);
 	}
 
-#if BUILD_BCM2835SPI == 1  //  Transmit and receive SWD commands over SPI...
-	spi_exchange(rnw, buf, offset, bit_cnt);
-#else  //  Transmit and receive SWD commands over GPIO...
+  if (bitbang_interface->swd_exchange) {
+    // kludge for custom SWD exchange, e.g. in the case of SPI
+    bitbang_interface->swd_exchange(rnw, buf, offset, bit_cnt);
+  } else {
+    for (unsigned int i = offset; i < bit_cnt + offset; i++) {
+      int bytec = i / 8;
+      int bcval = 1 << (i % 8);
+      int swdio = !rnw && (buf[bytec] & bcval);
 
-	for (unsigned int i = offset; i < bit_cnt + offset; i++) {
-		int bytec = i/8;
-		int bcval = 1 << (i % 8);
-		int swdio = !rnw && (buf[bytec] & bcval);
+      bitbang_interface->swd_write(0, swdio);
 
-		bitbang_interface->swd_write(0, swdio);
+      if (rnw && buf) {
+        if (bitbang_interface->swdio_read())
+          buf[bytec] |= bcval;
+        else
+          buf[bytec] &= ~bcval;
+      }
 
-		if (rnw && buf) {
-			if (bitbang_interface->swdio_read())
-				buf[bytec] |= bcval;
-			else
-				buf[bytec] &= ~bcval;
-		}
-
-		bitbang_interface->swd_write(1, swdio);
-	}
-#endif  //  BUILD_BCM2835SPI == 1
+      bitbang_interface->swd_write(1, swdio);
+    }
+  }
 
 	if (bitbang_interface->blink) {
 		/* FIXME: we should manage errors */

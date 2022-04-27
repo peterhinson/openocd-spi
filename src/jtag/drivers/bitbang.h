@@ -65,6 +65,9 @@ struct bitbang_interface {
 
 	/** Set SWCLK and SWDIO to the given value. */
 	int (*swd_write)(int swclk, int swdio);
+
+	/** Interface defined SWD exchange. */
+	void (*swd_exchange)(bool rnw, uint8_t buf[], unsigned int offset, unsigned int bit_cnt);
 };
 
 extern const struct swd_driver bitbang_swd;

@@ -60,6 +60,7 @@
 #include <jtag/interface.h>
 #include "bitbang.h"
 
+void spi_exchange(bool target_to_host, uint8_t buf[], unsigned int offset, unsigned int bit_cnt);
 static void spi_exchange_transmit(uint8_t buf[], unsigned int offset, unsigned int bit_cnt);
 static void spi_exchange_receive(uint8_t buf[], unsigned int offset, unsigned int bit_cnt);
 static void spi_transmit_resync(int fd);
@@ -137,12 +138,13 @@ static const struct command_registration bcm2835spi_command_handlers[] = {
 
 /// Bit Bang Interface for BCM2835 SPI
 static struct bitbang_interface bcm2835spi_bitbang = {
-	.read        = bcm2835spi_read,
-	.write       = bcm2835spi_write,
-	.swdio_read  = bcm2835_swdio_read,
-	.swdio_drive = bcm2835_swdio_drive,
-	.swd_write   = bcm2835spi_swd_write,
-	.blink       = NULL
+	.read         = bcm2835spi_read,
+	.write        = bcm2835spi_write,
+	.swdio_read   = bcm2835_swdio_read,
+	.swdio_drive  = bcm2835_swdio_drive,
+	.swd_write    = bcm2835spi_swd_write,
+	.blink        = NULL,
+	.swd_exchange = spi_exchange
 };
 
 /// JTAG interface
